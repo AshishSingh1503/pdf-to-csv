@@ -8,8 +8,8 @@ Original document processor for extracting contact information from PDFs using G
 - **Relaxed Address Regex**: More flexible address pattern matching
 - **Multiple Output Formats**: CSV and Excel output with summary sheets
 - **Duplicate Detection**: Find duplicate records based on mobile numbers
-- **Name Parsing**: Intelligent name parsing with fallback logic
-- **Phone Validation**: Clean and validate phone numbers using phonenumbers library
+- **Address Ordering Fix**: Automatically fixes Document AI address ordering issues
+- **Streamlit Web UI**: Easy-to-use web interface for processing and viewing data
 
 ## Setup
 
@@ -19,27 +19,30 @@ Original document processor for extracting contact information from PDFs using G
    ```
 
 2. **Configure environment**:
-   - Copy `config.env` and update with your settings
+   - Update `config.env` with your Google Cloud settings
    - Add your Google Cloud credentials JSON file
    - Set your Document AI processor ID
 
 3. **Run processing**:
    ```bash
-   # Command line processing
-   python process_documents.py
-   
-   # Or use the Streamlit web app
+   # Use the Streamlit web app (recommended)
    python run_app.py
+   
+   # Or command line processing
+   python process_documents.py
    ```
 
 ## Configuration
 
 Edit `config.env`:
 ```env
+# Google Cloud Configuration
 PROJECT_ID=your-project-id
 LOCATION=us
 PROCESSOR_ID=your-processor-id
 GOOGLE_APPLICATION_CREDENTIALS=./credentials.json
+
+# Output Configuration
 OUTPUT_DIR=output
 CSV_FILENAME=extracted_data.csv
 EXCEL_FILENAME=extracted_data.xlsx
@@ -105,6 +108,15 @@ duplicates = processor.detect_duplicates(results)
 
 The easiest way to test the document processor is using the Streamlit web app:
 
+### Features
+- **Upload PDFs**: Drag and drop multiple PDF files
+- **Process Files**: Extract data using Document AI
+- **View Results**: See both raw and filtered data side by side
+- **Download Options**: Get CSV, Excel, or ZIP files
+- **Address Fixing**: Automatically fixes Document AI address ordering issues
+
+### Usage
+
 1. **Run the app**:
    ```bash
    python run_app.py
@@ -114,7 +126,9 @@ The easiest way to test the document processor is using the Streamlit web app:
 
 3. **Upload PDF files** and click "Process Files"
 
-4. **Download results** as CSV or Excel
+4. **View results** in the interface
+
+5. **Download results** as CSV or Excel
 
 ### Features:
 - ✅ Upload multiple PDF files

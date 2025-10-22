@@ -22,8 +22,8 @@ class WorkingDocumentProcessor:
         opts = ClientOptions(api_endpoint=f"{location}-documentai.googleapis.com")
         self.client = documentai.DocumentProcessorServiceClient(client_options=opts)
     
-    def process_document(self, file_path: str) -> List[Dict]:
-        """Process a single document and return both raw and filtered records"""
+    def process_document(self, file_path: str) -> Dict:
+        """Process a single document and return both raw and filtered records with JSON data"""
         logger.info(f"Processing document: {file_path}")
 
         document = self._call_custom_extractor(file_path, self.processor_id)
@@ -33,7 +33,13 @@ class WorkingDocumentProcessor:
         
         if len(entities) == 0:
             logger.error("❌ NO ENTITIES FOUND - Check processor ID and document format")
-            return []
+            return {
+                'raw_records': [],
+                'filtered_records': [],
+                'file_name': os.path.basename(file_path),
+                'pre_processing_json': {},
+                'post_processing_json': {}
+            }
         
         # Get raw records (no filtering)
         raw_records = self._simple_grouping(entities)
@@ -43,11 +49,55 @@ class WorkingDocumentProcessor:
         filtered_records = self._clean_and_validate(raw_records)
         logger.info(f"Filtered records: {len(filtered_records)}")
         
-        # Return both raw and filtered
+        # Create pre-processing JSON (raw Document AI entities)
+        pre_processing_json = {
+            'file_name': os.path.basename(file_path),
+            'processing_timestamp': pd.Timestamp.now().isoformat(),
+            'document_ai_entities': entities,
+            'total_entities': len(entities),
+            'entity_types': list(set([e['type'] for e in entities])),
+            'raw_text': document.text if hasattr(document, 'text') else '',
+            'metadata': {
+                'processor_id': self.processor_id,
+                'project_id': self.project_id,
+                'location': self.location
+            }
+        }
+        
+        # Create post-processing JSON (processed records)
+        post_processing_json = {
+            'file_name': os.path.basename(file_path),
+            'processing_timestamp': pd.Timestamp.now().isoformat(),
+            'raw_records': raw_records,
+            'filtered_records': filtered_records,
+            'summary': {
+                'total_raw_records': len(raw_records),
+                'total_filtered_records': len(filtered_records),
+                'success_rate': f"{(len(filtered_records)/len(raw_records)*100):.1f}%" if raw_records else "0%"
+            },
+            'field_counts': {
+                'names': len([r for r in raw_records if r.get('first_name')]),
+                'mobiles': len([r for r in raw_records if r.get('mobile')]),
+                'addresses': len([r for r in raw_records if r.get('address')]),
+                'emails': len([r for r in raw_records if r.get('email')]),
+                'dateofbirths': len([r for r in raw_records if r.get('dateofbirth')]),
+                'landlines': len([r for r in raw_records if r.get('landline')]),
+                'lastseens': len([r for r in raw_records if r.get('lastseen')])
+            },
+            'metadata': {
+                'processor_id': self.processor_id,
+                'project_id': self.project_id,
+                'location': self.location
+            }
+        }
+        
+        # Return both raw and filtered with JSON data
         return {
             'raw_records': raw_records,
             'filtered_records': filtered_records,
-            'file_name': os.path.basename(file_path)
+            'file_name': os.path.basename(file_path),
+            'pre_processing_json': pre_processing_json,
+            'post_processing_json': post_processing_json
         }
     
     def _call_custom_extractor(self, file_path: str, processor_id: str):
@@ -73,39 +123,69 @@ class WorkingDocumentProcessor:
         entities = []
         
         for entity in document.entities:
+            entity_type = entity.type_.lower().strip()
+            entity_value = entity.mention_text.strip()
+            
+            # Debug logging
+            logger.info(f"Entity found: type='{entity_type}', value='{entity_value}'")
+            
             entities.append({
-                'type': entity.type_.lower().strip(),
-                'value': entity.mention_text.strip()
+                'type': entity_type,
+                'value': entity_value
             })
         
+        logger.info(f"Total entities extracted: {len(entities)}")
         return entities
     
     def _simple_grouping(self, entities: List[Dict]) -> List[Dict]:
         """Group entities into records without filtering"""
         records = []
-        names = [e['value'] for e in entities if 'name' in e['type']]
-        mobiles = [e['value'] for e in entities if 'mobile' in e['type'] or 'phone' in e['type']]
-        addresses = [e['value'] for e in entities if 'address' in e['type']]
-        emails = [e['value'] for e in entities if 'email' in e['type']]
+        names = [e['value'] for e in entities if e['type'] == 'name']
+        mobiles = [e['value'] for e in entities if e['type'] == 'mobile']
+        addresses = [e['value'] for e in entities if e['type'] == 'address']
+        emails = [e['value'] for e in entities if e['type'] == 'email']
+        dateofbirths = [e['value'] for e in entities if e['type'] == 'dateofbirth']
+        landlines = [e['value'] for e in entities if e['type'] == 'landline']
+        lastseens = [e['value'] for e in entities if e['type'] == 'lastseen']
         
-        logger.info(f"Found: {len(names)} names, {len(mobiles)} mobiles, {len(addresses)} addresses, {len(emails)} emails")
-        max_count = max(len(names), len(mobiles), len(addresses), len(emails)) if any([names, mobiles, addresses, emails]) else 0
+        logger.info(f"Found: {len(names)} names, {len(mobiles)} mobiles, {len(addresses)} addresses, {len(emails)} emails, {len(dateofbirths)} dateofbirths, {len(landlines)} landlines, {len(lastseens)} lastseens")
+        
+        # Debug: Show what entity types we found
+        entity_types = [e['type'] for e in entities]
+        logger.info(f"Entity types found: {set(entity_types)}")
+        
+        max_count = max(len(names), len(mobiles), len(addresses), len(emails), len(dateofbirths), len(landlines), len(lastseens)) if any([names, mobiles, addresses, emails, dateofbirths, landlines, lastseens]) else 0
         
         for i in range(max_count):
             record = {}
             
             if i < len(names):
-                record['name'] = names[i]
+                # Split name into first and last
+                name_parts = names[i].split()
+                if len(name_parts) >= 2:
+                    record['first_name'] = name_parts[0]
+                    record['last_name'] = ' '.join(name_parts[1:])
+                else:
+                    record['first_name'] = names[i]
+                    record['last_name'] = ''
             if i < len(mobiles):
                 record['mobile'] = mobiles[i]
             if i < len(addresses):
                 record['address'] = addresses[i]
             if i < len(emails):
                 record['email'] = emails[i]
+            if i < len(dateofbirths):
+                record['dateofbirth'] = dateofbirths[i]
+            if i < len(landlines):
+                record['landline'] = landlines[i]
+            if i < len(lastseens):
+                record['lastseen'] = lastseens[i]
             
-            if record.get('name'):
+            if record.get('first_name'):
                 records.append(record)
+                logger.info(f"Created record {i+1}: {record}")
         
+        logger.info(f"Created {len(records)} records total")
         return records
     
     def _fix_address_ordering(self, address: str) -> str:
@@ -157,20 +237,17 @@ class WorkingDocumentProcessor:
         clean_records = []
         
         for record in records:
-            name = record.get('name', '').strip()
+            first_name = record.get('first_name', '').strip()
+            last_name = record.get('last_name', '').strip()
             mobile = record.get('mobile', '').strip()  
             address = record.get('address', '').strip()
             email = record.get('email', '').strip()
+            dateofbirth = record.get('dateofbirth', '').strip()
+            landline = record.get('landline', '').strip()
+            lastseen = record.get('lastseen', '').strip()
             
-            if not name:
+            if not first_name:
                 continue
-            
-            name_parts = name.split()
-            if len(name_parts) < 2:
-                continue
-                
-            first_name = name_parts[0]
-            last_name = name_parts[1] 
             
             if len(first_name) <= 1:
                 continue
@@ -182,7 +259,7 @@ class WorkingDocumentProcessor:
             if not (len(mobile_digits) == 10 and mobile_digits.startswith('04')):
                 continue
 
-            if not address or not re.search(r'\d', address[:10]):
+            if not address or not re.search(r'\d', address[:15]):
                 continue
             
             # Fix address ordering
@@ -193,7 +270,10 @@ class WorkingDocumentProcessor:
                 'last_name': last_name, 
                 'mobile': mobile_digits,
                 'address': fixed_address,
-                'email': email if email else ''
+                'email': email if email else '',
+                'dateofbirth': dateofbirth if dateofbirth else '',
+                'landline': landline if landline else '',
+                'lastseen': lastseen if lastseen else ''
             })
         
         # Remove duplicates based on mobile
@@ -241,7 +321,7 @@ class WorkingDocumentProcessor:
         df = pd.DataFrame(records)
         
         # Standardize column order
-        standard_columns = ['first_name', 'last_name', 'mobile', 'address', 'email']
+        standard_columns = ['first_name', 'last_name', 'mobile', 'address', 'email', 'dateofbirth', 'landline', 'lastseen']
         if include_metadata:
             standard_columns.extend(['file_name', 'extraction_date'])
         
@@ -261,7 +341,7 @@ class WorkingDocumentProcessor:
         df = pd.DataFrame(records)
         
         # Standardize column order
-        standard_columns = ['first_name', 'last_name', 'mobile', 'address', 'email']
+        standard_columns = ['first_name', 'last_name', 'mobile', 'address', 'email', 'dateofbirth', 'landline', 'lastseen']
         if include_metadata:
             standard_columns.extend(['file_name', 'extraction_date'])
         

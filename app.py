@@ -2,6 +2,7 @@ import streamlit as st
 import os
 import pandas as pd
 import io
+import json
 from dotenv import load_dotenv
 from working_document_processor import WorkingDocumentProcessor
 import tempfile
@@ -64,6 +65,8 @@ if uploaded_files:
 
         all_raw_records = []
         all_filtered_records = []
+        all_pre_processing_json = []
+        all_post_processing_json = []
         processed_file_count = 0
         total_files = len(uploaded_files)
         progress_bar = st.progress(0)
@@ -89,6 +92,13 @@ if uploaded_files:
                         
                     all_raw_records.extend(result['raw_records'])
                     all_filtered_records.extend(result['filtered_records'])
+                    
+                    # Collect JSON data
+                    if result.get('pre_processing_json'):
+                        all_pre_processing_json.append(result['pre_processing_json'])
+                    if result.get('post_processing_json'):
+                        all_post_processing_json.append(result['post_processing_json'])
+                        
                 processed_file_count += 1
                 os.remove(tmp_file_path) # Clean up temp file
 
@@ -125,7 +135,7 @@ if uploaded_files:
             # Download options
             st.subheader("📥 Download Results")
 
-            # Create ZIP file with both raw and filtered data
+            # Create ZIP file with both raw and filtered data plus JSON
             zip_buffer = io.BytesIO()
             with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
                 # Add raw CSV
@@ -139,6 +149,38 @@ if uploaded_files:
                     filtered_csv = io.StringIO()
                     filtered_df.to_csv(filtered_csv, index=False)
                     zip_file.writestr("filtered_data.csv", filtered_csv.getvalue())
+                
+                # Add individual JSON files
+                for i, json_data in enumerate(all_pre_processing_json):
+                    filename = json_data.get('file_name', f'file_{i+1}')
+                    json_name = filename.replace('.pdf', '_pre.json')
+                    zip_file.writestr(f"json/{json_name}", json.dumps(json_data, indent=2))
+                
+                for i, json_data in enumerate(all_post_processing_json):
+                    filename = json_data.get('file_name', f'file_{i+1}')
+                    json_name = filename.replace('.pdf', '_post.json')
+                    zip_file.writestr(f"json/{json_name}", json.dumps(json_data, indent=2))
+                
+                # Add combined JSON files
+                if all_pre_processing_json:
+                    combined_pre_json = {
+                        'processing_session': {
+                            'total_files': processed_file_count,
+                            'timestamp': pd.Timestamp.now().isoformat()
+                        },
+                        'files': all_pre_processing_json
+                    }
+                    zip_file.writestr("combined_pre_processing.json", json.dumps(combined_pre_json, indent=2))
+                
+                if all_post_processing_json:
+                    combined_post_json = {
+                        'processing_session': {
+                            'total_files': processed_file_count,
+                            'timestamp': pd.Timestamp.now().isoformat()
+                        },
+                        'files': all_post_processing_json
+                    }
+                    zip_file.writestr("combined_post_processing.json", json.dumps(combined_post_json, indent=2))
                 
                 # Add summary
                 summary_data = {
@@ -155,82 +197,156 @@ if uploaded_files:
                 summary_df.to_csv(summary_csv, index=False)
                 zip_file.writestr("summary.csv", summary_csv.getvalue())
 
-            # Download buttons
+            # Download buttons - 2x3 grid
+            st.subheader("📥 Download Options")
+            
+            # Row 1: CSV files
             col1, col2, col3 = st.columns(3)
             
             with col1:
-                st.download_button(
-                    label="📦 Download ZIP (All Data)",
-                    data=zip_buffer.getvalue(),
-                    file_name="pdf_extraction_results.zip",
-                    mime="application/zip",
-                )
-            
-            with col2:
                 if all_raw_records:
                     raw_csv_buffer = io.StringIO()
                     raw_df.to_csv(raw_csv_buffer, index=False)
                     st.download_button(
-                        label="📄 Download Raw CSV",
+                        label="📄 Raw CSV",
                         data=raw_csv_buffer.getvalue(),
                         file_name="raw_data.csv",
                         mime="text/csv",
+                        use_container_width=True
                     )
             
-            with col3:
+            with col2:
                 if all_filtered_records:
                     filtered_csv_buffer = io.StringIO()
                     filtered_df.to_csv(filtered_csv_buffer, index=False)
                     st.download_button(
-                        label="✅ Download Filtered CSV",
+                        label="✅ Filtered CSV",
                         data=filtered_csv_buffer.getvalue(),
                         file_name="filtered_data.csv",
                         mime="text/csv",
+                        use_container_width=True
                     )
-
-            # Excel download
-            if all_filtered_records:
-                excel_buffer = io.BytesIO()
-                with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
-                    # Filtered data sheet
-                    filtered_df.to_excel(writer, sheet_name='Filtered Data', index=False)
-                    
-                    # Raw data sheet
-                    if all_raw_records:
-                        raw_df.to_excel(writer, sheet_name='Raw Data', index=False)
-                    
-                    # Duplicate detection
-                    if ENABLE_DUPLICATE_DETECTION and 'mobile' in filtered_df.columns:
-                        duplicates = processor.detect_duplicates(all_filtered_records)
-                        if duplicates:
-                            duplicates_df = pd.DataFrame(duplicates)
-                            duplicates_df.to_excel(writer, sheet_name='Duplicates', index=False)
-                            st.warning(f"⚠️ Found {len(duplicates)} duplicate records based on mobile number.")
-                        else:
-                            st.info("✅ No duplicate records found.")
-                    
-                    # Summary sheet
-                    summary_data = {
-                        'Metric': ['Total Files Processed', 'Raw Records', 'Filtered Records', 'Success Rate'],
-                        'Value': [
-                            processed_file_count,
-                            len(all_raw_records),
-                            len(all_filtered_records),
-                            f"{(len(all_filtered_records)/len(all_raw_records)*100):.1f}%" if all_raw_records else "0%"
-                        ]
-                    }
-                    summary_df = pd.DataFrame(summary_data)
-                    summary_df.to_excel(writer, sheet_name='Summary', index=False)
-
+            
+            with col3:
                 st.download_button(
-                    label="📊 Download Excel",
-                    data=excel_buffer.getvalue(),
-                    file_name="pdf_extraction_results.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    label="📦 ZIP (All Data)",
+                    data=zip_buffer.getvalue(),
+                    file_name="pdf_extraction_results.zip",
+                    mime="application/zip",
+                    use_container_width=True
                 )
+            
+            # Row 2: Excel files
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                if all_raw_records:
+                    raw_excel_buffer = io.BytesIO()
+                    with pd.ExcelWriter(raw_excel_buffer, engine='openpyxl') as writer:
+                        raw_df.to_excel(writer, sheet_name='Raw Data', index=False)
+                    st.download_button(
+                        label="📊 Raw Excel",
+                        data=raw_excel_buffer.getvalue(),
+                        file_name="raw_data.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True
+                    )
+            
+            with col2:
+                if all_filtered_records:
+                    filtered_excel_buffer = io.BytesIO()
+                    with pd.ExcelWriter(filtered_excel_buffer, engine='openpyxl') as writer:
+                        filtered_df.to_excel(writer, sheet_name='Filtered Data', index=False)
+                    st.download_button(
+                        label="📊 Filtered Excel",
+                        data=filtered_excel_buffer.getvalue(),
+                        file_name="filtered_data.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True
+                    )
+            
+            with col3:
+                # Empty column for alignment
+                pass
+
+            # Row 3: JSON files
+            if all_pre_processing_json or all_post_processing_json:
+                st.subheader("📄 JSON Downloads")
+                col1, col2, col3, col4 = st.columns(4)
+                
+                with col1:
+                    if all_pre_processing_json:
+                        # Individual pre-processing JSON files
+                        for i, json_data in enumerate(all_pre_processing_json):
+                            filename = json_data.get('file_name', f'file_{i+1}')
+                            json_name = filename.replace('.pdf', '_pre.json')
+                            st.download_button(
+                                label=f"📄 {json_name}",
+                                data=json.dumps(json_data, indent=2),
+                                file_name=json_name,
+                                mime="application/json",
+                                key=f"pre_json_{i}"
+                            )
+                
+                with col2:
+                    if all_post_processing_json:
+                        # Individual post-processing JSON files
+                        for i, json_data in enumerate(all_post_processing_json):
+                            filename = json_data.get('file_name', f'file_{i+1}')
+                            json_name = filename.replace('.pdf', '_post.json')
+                            st.download_button(
+                                label=f"📄 {json_name}",
+                                data=json.dumps(json_data, indent=2),
+                                file_name=json_name,
+                                mime="application/json",
+                                key=f"post_json_{i}"
+                            )
+                
+                with col3:
+                    if all_pre_processing_json:
+                        # Combined pre-processing JSON
+                        combined_pre_json = {
+                            'processing_session': {
+                                'total_files': processed_file_count,
+                                'timestamp': pd.Timestamp.now().isoformat()
+                            },
+                            'files': all_pre_processing_json
+                        }
+                        st.download_button(
+                            label="📄 Combined Pre JSON",
+                            data=json.dumps(combined_pre_json, indent=2),
+                            file_name="combined_pre_processing.json",
+                            mime="application/json"
+                        )
+                
+                with col4:
+                    if all_post_processing_json:
+                        # Combined post-processing JSON
+                        combined_post_json = {
+                            'processing_session': {
+                                'total_files': processed_file_count,
+                                'timestamp': pd.Timestamp.now().isoformat()
+                            },
+                            'files': all_post_processing_json
+                        }
+                        st.download_button(
+                            label="📄 Combined Post JSON",
+                            data=json.dumps(combined_post_json, indent=2),
+                            file_name="combined_post_processing.json",
+                            mime="application/json"
+                        )
+
+            # Show duplicate detection info
+            if ENABLE_DUPLICATE_DETECTION and all_filtered_records and 'mobile' in filtered_df.columns:
+                duplicates = processor.detect_duplicates(all_filtered_records)
+                if duplicates:
+                    st.warning(f"⚠️ Found {len(duplicates)} duplicate records based on mobile number.")
+                else:
+                    st.info("✅ No duplicate records found.")
         else:
             st.warning("No records extracted from the uploaded files.")
 
 # Footer
 st.markdown("---")
 st.markdown("**Note:** Raw records contain all extracted data without validation. Filtered records contain only validated data with proper name format, valid mobile numbers, and addresses with street numbers.")
+st.markdown("**Fields:** first_name, last_name, mobile, address, email, dateofbirth, landline, lastseen")
