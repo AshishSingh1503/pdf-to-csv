@@ -15,7 +15,10 @@ const Sidebar = () => {
         {/* Customer Collections */}
       </div>
       <div className="p-4 border-t border-gray-200">
-        <button className="w-full bg-blue-600 text-white py-2 rounded hover:bg-blue-700">
+        <button
+          className="w-full bg-blue-600 text-white py-2 rounded hover:bg-blue-700"
+          onClick={() => alert("New Customer clicked")}
+        >
           + New Customer
         </button>
       </div>
