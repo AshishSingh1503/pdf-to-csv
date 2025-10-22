@@ -2,8 +2,8 @@ import React from "react";
 
 const Footer = ({ data }) => {
   const handleDownload = () => {
-    if (data && data.zip) {
-      window.open(`http://localhost:5000${data.zip}`, "_blank");
+    if (data && data.zipPath) {
+      window.open(`http://localhost:5000${data.zipPath}`, "_blank");
     } else {
       alert("No zip file available for download.");
     }
