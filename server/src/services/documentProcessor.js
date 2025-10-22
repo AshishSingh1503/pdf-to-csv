@@ -17,14 +17,16 @@ const client = new DocumentProcessorServiceClient({
 
 export const processPDFs = async (pdfFiles) => {
   try {
+    // ✅ Clean old output files
+    clearOutput();
+
     // ✅ Prepare required directories
     const tempDir = path.join(process.cwd(), "temp");
     const outputDir = path.join(process.cwd(), "output");
+    const processedDir = path.join(outputDir, "processed_results");
     if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
     if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
-
-    // ✅ Clean old output files
-    clearOutput();
+    if (!fs.existsSync(processedDir)) fs.mkdirSync(processedDir, { recursive: true });
 
     const results = [];
     console.log(`⚙️ Processing ${pdfFiles.length} file(s)...`);

@@ -6,9 +6,7 @@ import archiver from "archiver";
 const OUTPUT_DIR = path.join(process.cwd(), "output");
 
 export const saveCSV = async (data, fileName) => {
-  if (!fs.existsSync(OUTPUT_DIR)) fs.mkdirSync(OUTPUT_DIR);
-
-  const csvPath = path.join(OUTPUT_DIR, fileName.replace(".pdf", ".csv"));
+  const csvPath = path.join(OUTPUT_DIR, "processed_results", fileName.replace(".pdf", ".csv"));
   const writer = createObjectCsvWriter({
     path: csvPath,
     header: [
