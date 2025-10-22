@@ -1,3 +1,4 @@
+// client/src/components/ClientTable.jsx
 import React from "react";
 
 const ClientTable = ({ data }) => {

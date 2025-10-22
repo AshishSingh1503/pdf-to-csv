@@ -51,7 +51,8 @@ const Home = () => {
             {loading && <p className="mt-4 text-gray-500">Processing files...</p>}
 
             {data ? (
-              <ClientTable data={data.results} />
+             <ClientTable data={data.results} />
+             
             ) : (
               <p className="mt-4 text-gray-500">Upload and process PDFs to see the results.</p>
             )}
