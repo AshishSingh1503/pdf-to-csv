@@ -20,7 +20,7 @@ export const processDocuments = async (req, res) => {
       address: record.address,
       dob: record.dateofbirth,
       seen: record.lastseen,
-      source: record.source || ''
+      source: record.file_name || ''
     }));
     
     res.json({ results: results || [], zipPath: `/api/documents/download?file=${path.basename(zipPath)}` });
