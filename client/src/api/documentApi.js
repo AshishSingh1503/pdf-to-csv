@@ -1,6 +1,6 @@
 import axios from "axios";
 
-const BASE_URL = "/api/documents";
+const BASE_URL = "http://localhost:5000/api/documents";
 
 export const uploadAndProcess = async (files, collectionId) => {
   const formData = new FormData();
