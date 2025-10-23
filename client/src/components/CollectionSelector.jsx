@@ -73,7 +73,7 @@ const CollectionSelector = ({ selectedCollection, onCollectionChange, disabled =
         required
       >
         <option value="">Choose a collection...</option>
-        {collections.map((collection) => (
+        {Array.isArray(collections) && collections.map((collection) => (
           <option key={collection.id} value={collection.id}>
             {collection.name}
           </option>

@@ -95,93 +95,77 @@ const CollectionsSidebar = ({ selectedCollection, onCollectionSelect, onRefresh 
       </div>
 
       {/* Collections List */}
-      <div className="flex-1 overflow-y-auto p-4">
-        {loading ? (
-          <div className="text-center text-gray-500">Loading collections...</div>
-        ) : error ? (
-          <div className="text-center text-red-500">{error}</div>
-        ) : (
-          <div className="space-y-2">
-            {/* All Collections Option */}
-            <div
-              className={`p-3 rounded-lg cursor-pointer border-2 transition-colors ${
-                !selectedCollection
-                  ? 'border-blue-500 bg-blue-50'
-                  : 'border-gray-200 hover:border-gray-300'
-              }`}
-              onClick={() => onCollectionSelect(null)}
-            >
-              <div className="font-medium text-gray-900">All Collections</div>
-              <div className="text-sm text-gray-500">View all data</div>
-            </div>
-
-            {/* Individual Collections */}
-            {(collections || []).map((collection) => (
-              <div
-                key={collection.id}
-                className={`p-3 rounded-lg cursor-pointer border-2 transition-colors ${
-                  selectedCollection && selectedCollection.id === collection.id
-                    ? 'border-blue-500 bg-blue-50'
-                    : 'border-gray-200 hover:border-gray-300'
-                }`}
-                onClick={() => onCollectionSelect(collection)}
-              >
-                <div className="flex items-start justify-between">
-                  <div className="flex-1">
-                    <div className="font-medium text-gray-900">{collection.name}</div>
-                    {collection.description && (
-                      <div className="text-sm text-gray-500 mt-1">{collection.description}</div>
-                    )}
-                    <div className="text-xs text-gray-400 mt-1">
-                      Created: {new Date(collection.created_at).toLocaleDateString()}
-                    </div>
-                  </div>
-                  
-                  {/* Actions Menu */}
-                  <div className="flex space-x-1 ml-2">
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleEditCollection(collection);
-                      }}
-                      className="p-1 text-gray-400 hover:text-blue-600"
-                      title="Edit collection"
-                    >
-                      ✏️
-                    </button>
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleArchiveCollection(collection);
-                      }}
-                      className="p-1 text-gray-400 hover:text-yellow-600"
-                      title="Archive collection"
-                    >
-                      📁
-                    </button>
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleDeleteCollection(collection);
-                      }}
-                      className="p-1 text-gray-400 hover:text-red-600"
-                      title="Delete collection"
-                    >
-                      🗑️
-                    </button>
-                  </div>
-                </div>
-              </div>
-            ))}
-
-            {collections.length === 0 && (
-              <div className="text-center text-gray-500 py-8">
-                No collections yet. Create your first collection!
-              </div>
-            )}
-          </div>
-        )}
-      </div>
+     <div className="flex-1 overflow-y-auto p-4">
+       {loading ? (
+         <div className="text-center text-gray-500">Loading collections...</div>
+       ) : error ? (
+         <div className="text-center text-red-500">{error}</div>
+       ) : (
+         <div className="space-y-2">
+           {/* All Collections Option */}
+           <div
+             className={`p-3 rounded-lg cursor-pointer border-2 transition-colors ${
+               !selectedCollection
+                 ? 'border-blue-500 bg-blue-50'
+                 : 'border-gray-200 hover:border-gray-300'
+             }`}
+             onClick={() => onCollectionSelect(null)}
+           >
+             <div className="font-medium text-gray-900">All Collections</div>
+             <div className="text-sm text-gray-500">View all data</div>
+           </div>
+     
+           {/* Individual Collections */}
+           {Array.isArray(collections) && collections.map((collection) => (
+             <div
+               key={collection.id}
+               className={`p-3 rounded-lg cursor-pointer border-2 flex items-center justify-between transition-colors ${
+                 selectedCollection && selectedCollection.id === collection.id
+                   ? 'border-blue-500 bg-blue-50'
+                   : 'border-gray-200 hover:border-gray-300'
+               }`}
+               onClick={() => onCollectionSelect(collection)}
+             >
+               <div>
+                 <div className="font-medium text-gray-900">{collection.name}</div>
+                 <div className="text-sm text-gray-500">
+                   {collection.description || `${collection.items?.length || 0} items`}
+                 </div>
+               </div>
+               <div className="flex items-center space-x-2">
+                 <button
+                   onClick={(e) => { e.stopPropagation(); handleEditCollection(collection); }}
+                   className="text-sm text-gray-600 hover:text-gray-900"
+                   title="Edit"
+                 >
+                   Edit
+                 </button>
+                 <button
+                   onClick={(e) => { e.stopPropagation(); handleArchiveCollection(collection); }}
+                   className="text-sm text-gray-600 hover:text-gray-900"
+                   title="Archive"
+                 >
+                   Archive
+                 </button>
+                 <button
+                   onClick={(e) => { e.stopPropagation(); handleDeleteCollection(collection); }}
+                   className="text-sm text-red-600 hover:text-red-700"
+                   title="Delete"
+                 >
+                   Delete
+                 </button>
+               </div>
+             </div>
+           ))}
+     
+           {(!collections || collections.length === 0) && (
+             <div className="text-center text-gray-500 py-8">
+               No collections yet. Create your first collection!
+             </div>
+           )}
+         </div>
+       )}
+     </div>
 
       {/* Collection Modal */}
       <CollectionModal
