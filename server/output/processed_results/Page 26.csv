@@ -48,8 +48,7 @@ NSW 2289"
 address,"75 Carolyn Street
 ADAMSTOWN HEIGHTS
 NSW 2289"
-address,"15 Caroona Close
-ADAMSTOWN HEIGHTS NSW 2289"
+address,15 Caroona Close NSW 2289 ADAMSTOWN HEIGHTS
 address,"83 Madison Drive
 ADAMSTOWN HEIGHTS
 NSW 2289"
@@ -563,9 +562,6 @@ landline,"02 4920
 6356"
 landline,"02 4942
 4406"
-landline,02 4947 8019
-landline,"02 4943
-1383"
 landline,"02 4942
 4406"
 landline,02 4957 7062
