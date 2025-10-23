@@ -170,9 +170,22 @@ export const processPDFs = async (pdfFiles) => {
     
     // --- Create final JSON objects ---
 
+    // Create pre-processing records with full_name instead of first_name/last_name
+    const preProcessingRecords = allRawRecords.map(record => ({
+      full_name: `${record.first_name || ''} ${record.last_name || ''}`.trim(),
+      mobile: record.mobile,
+      address: record.address,
+      email: record.email,
+      dateofbirth: record.dateofbirth,
+      landline: record.landline,
+      lastseen: record.lastseen,
+      file_name: record.file_name
+    }));
+
     const preProcessingJson = {
       processing_timestamp: new Date().toISOString(),
       total_files: pdfFiles.length,
+      raw_records: preProcessingRecords,
       document_ai_entities: allEntities,
     };
 

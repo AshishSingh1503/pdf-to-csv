@@ -1,0 +1,23 @@
+# Simple Node.js server for frontend
+FROM node:18-alpine
+
+WORKDIR /app
+
+# Copy package files
+COPY package-simple.json package.json
+
+# Install dependencies
+RUN npm install
+
+# Copy simple server
+COPY simple-server.js .
+
+# Create dist directory and copy built files
+RUN mkdir -p dist
+COPY dist/ dist/
+
+# Expose port
+EXPOSE 8080
+
+# Start the server
+CMD ["npm", "start"]

@@ -1,0 +1,12 @@
+{
+  "name": "pdf2csv-frontend-simple",
+  "version": "1.0.0",
+  "description": "Simple frontend server",
+  "main": "simple-server.js",
+  "scripts": {
+    "start": "node simple-server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2"
+  }
+}

@@ -49,10 +49,25 @@ class WorkingDocumentProcessor:
         filtered_records = self._clean_and_validate(raw_records)
         logger.info(f"Filtered records: {len(filtered_records)}")
         
-        # Create pre-processing JSON (raw Document AI entities)
+        # Create pre-processing records with full_name instead of first_name/last_name
+        pre_processing_records = []
+        for record in raw_records:
+            pre_processing_records.append({
+                'full_name': f"{record.get('first_name', '')} {record.get('last_name', '')}".strip(),
+                'mobile': record.get('mobile', ''),
+                'address': record.get('address', ''),
+                'email': record.get('email', ''),
+                'dateofbirth': record.get('dateofbirth', ''),
+                'landline': record.get('landline', ''),
+                'lastseen': record.get('lastseen', ''),
+                'file_name': os.path.basename(file_path)
+            })
+
+        # Create pre-processing JSON (raw Document AI entities + records)
         pre_processing_json = {
             'file_name': os.path.basename(file_path),
             'processing_timestamp': pd.Timestamp.now().isoformat(),
+            'raw_records': pre_processing_records,
             'document_ai_entities': entities,
             'total_entities': len(entities),
             'entity_types': list(set([e['type'] for e in entities])),

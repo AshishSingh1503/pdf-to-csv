@@ -1,0 +1,111 @@
+// server/src/models/Collection.js
+import { query } from './database.js';
+
+export class Collection {
+  constructor(data) {
+    this.id = data.id;
+    this.name = data.name;
+    this.description = data.description;
+    this.status = data.status || 'active';
+    this.created_at = data.created_at;
+    this.updated_at = data.updated_at;
+  }
+
+  // Get all collections
+  static async findAll() {
+    const result = await query(
+      'SELECT * FROM collections WHERE status = $1 ORDER BY created_at DESC',
+      ['active']
+    );
+    return result.rows.map(row => new Collection(row));
+  }
+
+  // Get collection by ID
+  static async findById(id) {
+    const result = await query(
+      'SELECT * FROM collections WHERE id = $1 AND status = $2',
+      [id, 'active']
+    );
+    return result.rows.length > 0 ? new Collection(result.rows[0]) : null;
+  }
+
+  // Create new collection
+  static async create({ name, description = '' }) {
+    const result = await query(
+      'INSERT INTO collections (name, description) VALUES ($1, $2) RETURNING *',
+      [name, description]
+    );
+    return new Collection(result.rows[0]);
+  }
+
+  // Update collection
+  async update({ name, description }) {
+    const result = await query(
+      'UPDATE collections SET name = $1, description = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3 RETURNING *',
+      [name, description, this.id]
+    );
+    if (result.rows.length > 0) {
+      Object.assign(this, result.rows[0]);
+      return this;
+    }
+    return null;
+  }
+
+  // Archive collection (soft delete)
+  async archive() {
+    const result = await query(
+      'UPDATE collections SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 RETURNING *',
+      ['archived', this.id]
+    );
+    if (result.rows.length > 0) {
+      this.status = 'archived';
+      return this;
+    }
+    return null;
+  }
+
+  // Delete collection (hard delete)
+  async delete() {
+    const result = await query(
+      'DELETE FROM collections WHERE id = $1 RETURNING *',
+      [this.id]
+    );
+    return result.rows.length > 0;
+  }
+
+  // Get collection statistics
+  async getStats() {
+    const preProcessCount = await query(
+      'SELECT COUNT(*) FROM pre_process_records WHERE collection_id = $1',
+      [this.id]
+    );
+    const postProcessCount = await query(
+      'SELECT COUNT(*) FROM post_process_records WHERE collection_id = $1',
+      [this.id]
+    );
+    const fileCount = await query(
+      'SELECT COUNT(*) FROM file_metadata WHERE collection_id = $1',
+      [this.id]
+    );
+
+    return {
+      preProcessRecords: parseInt(preProcessCount.rows[0].count),
+      postProcessRecords: parseInt(postProcessCount.rows[0].count),
+      totalFiles: parseInt(fileCount.rows[0].count)
+    };
+  }
+
+  // Check if collection name exists
+  static async nameExists(name, excludeId = null) {
+    let queryText = 'SELECT id FROM collections WHERE name = $1';
+    let params = [name];
+    
+    if (excludeId) {
+      queryText += ' AND id != $2';
+      params.push(excludeId);
+    }
+    
+    const result = await query(queryText, params);
+    return result.rows.length > 0;
+  }
+}
