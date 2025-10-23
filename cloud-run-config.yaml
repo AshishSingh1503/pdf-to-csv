@@ -1,0 +1,90 @@
+# Cloud Run Service Configuration
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: pdf2csv-backend
+  annotations:
+    run.googleapis.com/ingress: all
+    run.googleapis.com/execution-environment: gen2
+spec:
+  template:
+    metadata:
+      annotations:
+        run.googleapis.com/execution-environment: gen2
+        run.googleapis.com/cpu-throttling: "false"
+    spec:
+      containerConcurrency: 100
+      timeoutSeconds: 300
+      containers:
+      - image: gcr.io/pdf2csv-475708/pdf2csv-backend:latest
+        ports:
+        - containerPort: 5000
+        env:
+        - name: NODE_ENV
+          value: "production"
+        - name: PORT
+          value: "5000"
+        - name: PROJECT_ID
+          value: "pdf2csv-475708"
+        - name: LOCATION
+          value: "us"
+        - name: PROCESSOR_ID
+          value: "9f82bf3d2a02e2ab"
+        - name: DB_HOST
+          value: "10.0.0.3"  # Cloud SQL private IP
+        - name: DB_PORT
+          value: "5432"
+        - name: DB_NAME
+          value: "pdf2csv_db"
+        - name: DB_USER
+          value: "postgres"
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: db-password
+              key: password
+        - name: DB_SSL
+          value: "true"
+        - name: INPUT_BUCKET
+          value: "pdf-data-extraction-input-bucket"
+        - name: OUTPUT_BUCKET
+          value: "pdf-data-extraction-output-bucket"
+        - name: STORAGE_LOCATION
+          value: "us"
+        resources:
+          limits:
+            cpu: "2"
+            memory: "4Gi"
+          requests:
+            cpu: "1"
+            memory: "2Gi"
+---
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: pdf2csv-frontend
+  annotations:
+    run.googleapis.com/ingress: all
+    run.googleapis.com/execution-environment: gen2
+spec:
+  template:
+    metadata:
+      annotations:
+        run.googleapis.com/execution-environment: gen2
+    spec:
+      containerConcurrency: 1000
+      timeoutSeconds: 60
+      containers:
+      - image: gcr.io/pdf2csv-475708/pdf2csv-frontend:latest
+        ports:
+        - containerPort: 80
+        env:
+        - name: REACT_APP_API_URL
+          value: "https://pdf2csv-backend-xxxxx-uc.a.run.app"  # Will be updated after backend deployment
+        resources:
+          limits:
+            cpu: "1"
+            memory: "1Gi"
+          requests:
+            cpu: "0.5"
+            memory: "512Mi"

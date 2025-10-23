@@ -5,20 +5,24 @@
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "node app.js"
+    "start": "node index.js",
+    "dev": "node index.js",
+    "build": "echo 'No build step required for Node.js'"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "dependencies": {
     "@google-cloud/documentai": "^9.5.0",
+    "@google-cloud/storage": "^7.7.0",
     "archiver": "^7.0.1",
     "cors": "^2.8.5",
     "csv-parser": "^3.2.0",
     "csv-writer": "^1.6.0",
     "dotenv": "^17.2.3",
     "express": "^5.1.0",
-    "express-fileupload": "^1.5.2"
+    "express-fileupload": "^1.5.2",
+    "pg": "^8.11.3"
   },
   "type": "module"
 }

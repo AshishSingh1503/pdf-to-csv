@@ -24,4 +24,17 @@ export const config = {
   enableDuplicateDetection: process.env.ENABLE_DUPLICATE_DETECTION === "true",
   duplicateKeyField: process.env.DUPLICATE_KEY_FIELD || "mobile",
   outputDir: outputPath,
+  
+  // Database configuration
+  dbHost: process.env.DB_HOST || "localhost",
+  dbPort: parseInt(process.env.DB_PORT) || 5432,
+  dbName: process.env.DB_NAME || "pdf2csv_db",
+  dbUser: process.env.DB_USER || "postgres",
+  dbPassword: process.env.DB_PASSWORD || "",
+  dbSsl: process.env.DB_SSL === "true",
+  
+  // Cloud Storage configuration
+  inputBucket: process.env.INPUT_BUCKET || "pdf-data-extraction-input-bucket",
+  outputBucket: process.env.OUTPUT_BUCKET || "pdf-data-extraction-output-bucket",
+  storageLocation: process.env.STORAGE_LOCATION || "us",
 };

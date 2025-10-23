@@ -48,7 +48,8 @@ NSW 2289"
 address,"75 Carolyn Street
 ADAMSTOWN HEIGHTS
 NSW 2289"
-address,15 Caroona Close NSW 2289 ADAMSTOWN HEIGHTS
+address,"15 Caroona Close
+ADAMSTOWN HEIGHTS NSW 2289"
 address,"83 Madison Drive
 ADAMSTOWN HEIGHTS
 NSW 2289"
@@ -68,9 +69,7 @@ ADAMSTOWN HEIGHTS
 NSW 2289"
 address,"4 Kara Street
 ADAMSTOWN HEIGHTS NSW 2289"
-address,"Unit 2 54 Garden Grove
-Parade
-ADAMSTOWN HEIGHTS
+address,"Parade Unit 2 54 Garden Grove ADAMSTOWN HEIGHTS
 NSW 2289"
 address,"8 Astor Street
 ADAMSTOWN HEIGHTS
@@ -83,9 +82,7 @@ NSW 2289"
 address,"13 Sheridan Avenue
 ADAMSTOWN HEIGHTS
 NSW 2289"
-address,"Unit 6 54 Garden Grove
-Parade
-ADAMSTOWN HEIGHTS
+address,"Parade Unit 6 54 Garden Grove ADAMSTOWN HEIGHTS
 NSW 2289"
 address,"20 Bulkara Street
 ADAMSTOWN HEIGHTS
@@ -365,9 +362,6 @@ name,Maria Drozdzewski
 name,Peter Anthony Lee
 name,William Henry Wharton
 name,Kathryn Knott
-name,Daphne Jean Thomas
-name,"Nicole
-Phillips"
 name,Grant Davis
 name,James Senior
 name,Howard Bird
@@ -378,8 +372,6 @@ name,Katie Bates
 name,John MacFarlane
 name,Geoffrey Roser
 name,Jennifer Carruthers
-name,"Lorraine
-Yvonne Mullins"
 name,Robyn Ellen Pinkerton
 name,Robyn Kenna
 name,Tracy Fitzsimmons
@@ -404,7 +396,6 @@ name,Diane Hay
 name,Umahdevi Nagamuthu
 name,Matthew Hawked
 name,Natpatsorn Oliver
-name,Kathleen KennedyMyers-
 name,Sandra Hartono
 name,Ross Baines
 name,Rita Di Prinzio
@@ -415,8 +406,6 @@ name,Ann Maree Keating
 name,David James Keating
 name,Beverley Ann Medlicott
 name,William Norman Giles
-name,"Keffa
-Louise Heaney"
 name,Niki Georgiou
 name,Gary Brian Watkins
 name,Wallace Allen Johnston
@@ -428,10 +417,6 @@ name,Christopher McCarthy
 name,Grant Davis
 name,David Ray
 name,Lawrence D Burden
-name,"M Pagey
-Jane"
-name,"J Whitton
-David"
 name,Glenn Skelly
 name,Chloe Morgan
 email,golden3@ms10.hinet.net
@@ -562,6 +547,9 @@ landline,"02 4920
 6356"
 landline,"02 4942
 4406"
+landline,02 4947 8019
+landline,"02 4943
+1383"
 landline,"02 4942
 4406"
 landline,02 4957 7062
