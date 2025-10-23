@@ -116,7 +116,7 @@ const CollectionsSidebar = ({ selectedCollection, onCollectionSelect, onRefresh 
             </div>
 
             {/* Individual Collections */}
-            {collections.map((collection) => (
+            {(collections || []).map((collection) => (
               <div
                 key={collection.id}
                 className={`p-3 rounded-lg cursor-pointer border-2 transition-colors ${

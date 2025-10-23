@@ -100,8 +100,8 @@ const Home = () => {
       }
       
       setData({
-        postProcessResults: postProcessData,
-        preProcessResults: preProcessData
+        postProcessResults: postProcessData || [],
+        preProcessResults: preProcessData || []
       });
     } catch (error) {
       console.error('Error fetching data:', error);
@@ -164,7 +164,7 @@ const Home = () => {
   const getCurrentData = () => {
     if (!data) return [];
     
-    let sourceData = isPostProcess ? data.postProcessResults : data.preProcessResults;
+    let sourceData = isPostProcess ? (data.postProcessResults || []) : (data.preProcessResults || []);
     
     if (selectedPdf) {
       sourceData = sourceData.filter(item => item.source === selectedPdf.name);
