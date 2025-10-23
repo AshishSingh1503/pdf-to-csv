@@ -18,7 +18,7 @@ const Header = ({ customer, onUploadClick, selectedCollection, onCollectionChang
             disabled={!selectedCollection}
             title={!selectedCollection ? "Please select a collection first" : "Upload PDFs"}
           >
-            Upload PDFs (Max 10)
+            Upload PDFs (Max 25)
           </button>
         </div>
       </div>

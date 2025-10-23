@@ -99,16 +99,18 @@ export const getPostProcessData = async (req, res) => {
 // Search data across both pre and post process
 export const searchData = async (req, res) => {
   try {
-    const { query: searchTerm, collectionId, type = 'both' } = req.query;
-    
+    const { query: searchTerm, collectionId, type = 'both', page = 1, limit = 50 } = req.query;
+    const offset = (page - 1) * limit;
+
     if (!searchTerm || searchTerm.trim() === '') {
       return res.status(400).json({ success: false, error: 'Search term is required' });
     }
     
     const results = {};
+    let totalCount = 0;
     
     if (type === 'both' || type === 'pre') {
-      const preRecords = await PreProcessRecord.search(searchTerm, collectionId);
+      const preRecords = await PreProcessRecord.search(searchTerm, collectionId, parseInt(limit), offset);
       results.preProcess = preRecords.map(record => ({
         id: record.id,
         full_name: record.full_name,
@@ -120,10 +122,11 @@ export const searchData = async (req, res) => {
         source: record.file_name,
         created_at: record.created_at
       }));
+      totalCount += await PreProcessRecord.count(collectionId, searchTerm);
     }
     
     if (type === 'both' || type === 'post') {
-      const postRecords = await PostProcessRecord.search(searchTerm, collectionId);
+      const postRecords = await PostProcessRecord.search(searchTerm, collectionId, parseInt(limit), offset);
       results.postProcess = postRecords.map(record => ({
         id: record.id,
         first: record.first_name,
@@ -136,9 +139,19 @@ export const searchData = async (req, res) => {
         source: record.file_name,
         created_at: record.created_at
       }));
+      totalCount += await PostProcessRecord.count(collectionId, searchTerm);
     }
     
-    res.json({ success: true, data: results });
+    res.json({
+      success: true,
+      data: results,
+      pagination: {
+        page: parseInt(page),
+        limit: parseInt(limit),
+        total: totalCount,
+        pages: Math.ceil(totalCount / limit)
+      }
+    });
   } catch (error) {
     console.error('Error searching data:', error);
     res.status(500).json({ success: false, error: 'Failed to search data' });

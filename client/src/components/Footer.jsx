@@ -1,11 +1,19 @@
 import React from "react";
 
-const Footer = ({ customer, data, isPostProcess, onToggleProcess, sortField, onClearSort }) => {
+const Footer = ({ customer, data, isPostProcess, onToggleProcess, sortField, onClearSort, selectedCollection }) => {
   const handleDownload = () => {
-    if (data && data.zipPath) {
-      window.open(`http://localhost:5000${data.zipPath}`, "_blank");
+    if (selectedCollection) {
+      window.open(`http://localhost:5000/api/documents/download/collection/${selectedCollection.id}`, "_blank");
     } else {
-      alert("No zip file available for download.");
+      alert("Please select a collection to download.");
+    }
+  };
+
+  const handleExcelDownload = () => {
+    if (selectedCollection) {
+      window.open(`http://localhost:5000/api/documents/download/collection/${selectedCollection.id}/excel`, "_blank");
+    } else {
+      alert("Please select a collection to download.");
     }
   };
 
@@ -20,9 +28,9 @@ const Footer = ({ customer, data, isPostProcess, onToggleProcess, sortField, onC
       </div>
       <div className="flex items-center space-x-4">
         <label className="flex items-center space-x-2">
-          <input 
-            type="checkbox" 
-            className="form-checkbox" 
+          <input
+            type="checkbox"
+            className="form-checkbox"
             checked={isPostProcess}
             onChange={onToggleProcess}
           />
@@ -41,7 +49,13 @@ const Footer = ({ customer, data, isPostProcess, onToggleProcess, sortField, onC
           className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
           onClick={handleDownload}
         >
-          Download
+          Download CSV
+        </button>
+        <button
+          className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700"
+          onClick={handleExcelDownload}
+        >
+          Download Excel
         </button>
       </div>
     </div>

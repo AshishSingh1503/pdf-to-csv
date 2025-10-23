@@ -23,6 +23,7 @@ const Home = () => {
   const [selectedCollection, setSelectedCollection] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [showCollectionsSidebar, setShowCollectionsSidebar] = useState(true);
+  const [totalPages, setTotalPages] = useState(1);
   const itemsPerPage = 50;
 
   const handleUpload = async (newFiles, collectionId) => {
@@ -87,16 +88,20 @@ const Home = () => {
       let preProcessData = [];
       
       if (searchTerm) {
-        const searchResult = await dataApi.search(searchTerm, collectionId, 'both');
+        const searchResult = await dataApi.search(searchTerm, collectionId, 'both', currentPage, itemsPerPage);
         postProcessData = searchResult.data.postProcess || [];
         preProcessData = searchResult.data.preProcess || [];
+        setTotalPages(searchResult.pagination.pages);
       } else {
-        const [postResult, preResult] = await Promise.all([
-          dataApi.getPostProcess(collectionId, null, currentPage, itemsPerPage),
-          dataApi.getPreProcess(collectionId, null, currentPage, itemsPerPage)
-        ]);
-        postProcessData = postResult.data;
-        preProcessData = preResult.data;
+        if (isPostProcess) {
+          const result = await dataApi.getPostProcess(collectionId, null, currentPage, itemsPerPage);
+          postProcessData = result.data;
+          setTotalPages(result.pagination.pages);
+        } else {
+          const result = await dataApi.getPreProcess(collectionId, null, currentPage, itemsPerPage);
+          preProcessData = result.data;
+          setTotalPages(result.pagination.pages);
+        }
       }
       
       setData({
@@ -114,7 +119,7 @@ const Home = () => {
   // Load data when collection or search changes
   useEffect(() => {
     fetchData();
-  }, [selectedCollection, searchTerm, currentPage]);
+  }, [selectedCollection, searchTerm, currentPage, isPostProcess]);
 
   const handleSearch = (term) => {
     setSearchTerm(term);
@@ -217,10 +222,7 @@ const Home = () => {
     return sourceData;
   };
 
-  const filteredData = getCurrentData();
-  
-  const totalPages = Math.ceil(filteredData.length / itemsPerPage);
-  const paginatedData = filteredData.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
+  const paginatedData = getCurrentData();
 
   return (
     <div className="flex h-screen bg-gray-50">
@@ -299,6 +301,7 @@ const Home = () => {
           onToggleProcess={handleToggleProcess}
           sortField={sortField}
           onClearSort={handleClearSort}
+          selectedCollection={selectedCollection}
         />
         <Pagination currentPage={currentPage} totalPages={totalPages} onPageChange={handlePageChange} />
       </div>

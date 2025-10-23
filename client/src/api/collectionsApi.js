@@ -68,11 +68,13 @@ export const dataApi = {
   },
 
   // Search data
-  search: async (query, collectionId = null, type = 'both') => {
+  search: async (query, collectionId = null, type = 'both', page = 1, limit = 50) => {
     const params = new URLSearchParams();
     params.append('query', query);
     if (collectionId) params.append('collectionId', collectionId);
     params.append('type', type);
+    params.append('page', page);
+    params.append('limit', limit);
     
     const { data } = await axios.get(`${BASE_URL}/data/search?${params}`);
     return data;

@@ -149,13 +149,27 @@ export class PostProcessRecord {
   }
 
   // Get count of records
-  static async count(collectionId = null) {
+  static async count(collectionId = null, searchTerm = null) {
     let queryText = 'SELECT COUNT(*) FROM post_process_records';
     let params = [];
+    let paramCount = 0;
 
     if (collectionId) {
       queryText += ' WHERE collection_id = $1';
       params.push(collectionId);
+      paramCount = 1;
+    }
+
+    if (searchTerm) {
+      queryText += ` ${paramCount > 0 ? 'AND' : 'WHERE'} (
+        LOWER(first_name) LIKE LOWER($${paramCount + 1}) OR
+        LOWER(last_name) LIKE LOWER($${paramCount + 1}) OR
+        LOWER(mobile) LIKE LOWER($${paramCount + 1}) OR
+        LOWER(email) LIKE LOWER($${paramCount + 1}) OR
+        LOWER(address) LIKE LOWER($${paramCount + 1}) OR
+        LOWER(file_name) LIKE LOWER($${paramCount + 1})
+      )`;
+      params.push(`%${searchTerm}%`);
     }
 
     const result = await query(queryText, params);
