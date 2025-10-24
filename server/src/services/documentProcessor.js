@@ -11,9 +11,15 @@ if (!fs.existsSync(config.credentials)) {
 }
 
 // Initialize Document AI client
-const client = new DocumentProcessorServiceClient({
-  keyFilename: config.credentials,
-});
+let client;
+try {
+  client = new DocumentProcessorServiceClient({
+    keyFilename: config.credentials,
+  });
+} catch (error) {
+  console.error("🔥 Failed to initialize Document AI client. Please check your Google Cloud credentials.", error);
+  throw new Error("Failed to initialize Document AI client. Please check your Google Cloud credentials.");
+}
 
 // --- Helper Functions ported from Python ---
 
