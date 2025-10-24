@@ -1,0 +1,12 @@
+runtime: nodejs18
+
+handlers:
+- url: /static
+  static_dir: dist/assets
+
+- url: /.*
+  static_files: dist/index.html
+  upload: dist/index.html
+
+env_variables:
+  REACT_APP_API_URL: https://pdf2csv-475708.uc.r.appspot.com

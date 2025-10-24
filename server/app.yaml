@@ -1,0 +1,23 @@
+runtime: nodejs18
+
+env_variables:
+  NODE_ENV: production
+  PORT: 8080
+  PROJECT_ID: pdf2csv-475708
+  LOCATION: us
+  PROCESSOR_ID: 9f82bf3d2a02e2ab
+  DB_HOST: /cloudsql/pdf2csv-475708:us-central1:pdf2csv-instance
+  DB_PORT: 5432
+  DB_NAME: pdf2csv_db
+  DB_USER: postgres
+  DB_PASSWORD: postgres
+  DB_SSL: true
+  INPUT_BUCKET: pdf-data-extraction-input-bucket
+  OUTPUT_BUCKET: pdf-data-extraction-output-bucket
+
+beta_settings:
+  cloud_sql_instances: pdf2csv-475708:us-central1:pdf2csv-instance
+
+automatic_scaling:
+  min_instances: 0
+  max_instances: 10

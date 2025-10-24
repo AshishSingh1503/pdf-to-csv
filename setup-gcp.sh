@@ -34,11 +34,9 @@ gcloud sql instances create $INSTANCE_NAME \
   --storage-size=10GB \
   --storage-auto-increase \
   --backup-start-time=03:00 \
-  --enable-bin-log \
   --maintenance-window-day=SUN \
   --maintenance-window-hour=03 \
-  --maintenance-release-channel=production \
-  --deletion-protection
+  --maintenance-release-channel=production
 
 # 4. Create database
 echo "📊 Creating database..."
