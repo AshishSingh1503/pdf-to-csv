@@ -1,12 +1,9 @@
-
 import React from "react";
-
-const API_URL = (import.meta.env.VITE_API_URL || "http://localhost:5000").replace(/\/$/, "");
 
 const Footer = ({ customer, data, isPostProcess, onToggleProcess, sortField, onClearSort, selectedCollection }) => {
   const handleDownload = () => {
     if (selectedCollection) {
-      window.open(`${API_URL}/api/documents/download/collection/${selectedCollection.id}`, "_blank");
+      window.open(`https://pdf2csv-backend-2xcfwc7m6a-uc.a.run.app/api/documents/download/collection/${selectedCollection.id}`, "_blank");
     } else {
       alert("Please select a collection to download.");
     }
@@ -14,7 +11,7 @@ const Footer = ({ customer, data, isPostProcess, onToggleProcess, sortField, onC
 
   const handleExcelDownload = () => {
     if (selectedCollection) {
-      window.open(`${API_URL}/api/documents/download/collection/${selectedCollection.id}/excel`, "_blank");
+      window.open(`https://pdf2csv-backend-2xcfwc7m6a-uc.a.run.app/api/documents/download/collection/${selectedCollection.id}/excel`, "_blank");
     } else {
       alert("Please select a collection to download.");
     }
