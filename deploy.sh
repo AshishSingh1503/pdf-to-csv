@@ -40,7 +40,7 @@ gcloud run deploy pdf2csv-backend \
   --region $REGION \
   --allow-unauthenticated \
   --service-account $SERVICE_ACCOUNT \
-  --set-env-vars="NODE_ENV=production,PORT=5000,PROJECT_ID=$PROJECT_ID,LOCATION=us,PROCESSOR_ID=9f82bf3d2a02e2ab,INPUT_BUCKET=pdf-data-extraction-input-bucket,OUTPUT_BUCKET=pdf-data-extraction-output-bucket,STORAGE_LOCATION=us,DB_HOST=/cloudsql/pdf2csv-475708:us-central1:pdf2csv-instance,DB_PORT=5432,DB_NAME=pdf2csv_db,DB_USER=805037964827-compute@developer,DB_SSL=true" \
+  --set-env-vars="NODE_ENV=production,PROJECT_ID=$PROJECT_ID,LOCATION=us,PROCESSOR_ID=9f82bf3d2a02e2ab,INPUT_BUCKET=pdf-data-extraction-input-bucket,OUTPUT_BUCKET=pdf-data-extraction-output-bucket,STORAGE_LOCATION=us,DB_HOST=/cloudsql/pdf2csv-475708:us-central1:pdf2csv-instance,DB_PORT=5432,DB_NAME=pdf2csv_db,DB_USER=805037964827-compute@developer,DB_SSL=true" \
   --set-cloudsql-instances="pdf2csv-475708:us-central1:pdf2csv-instance" \
   --memory=4Gi \
   --cpu=2 \
