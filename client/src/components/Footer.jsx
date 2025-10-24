@@ -3,7 +3,7 @@ import React from "react";
 const Footer = ({ customer, data, isPostProcess, onToggleProcess, sortField, onClearSort, selectedCollection }) => {
   const handleDownload = () => {
     if (selectedCollection) {
-      window.open(`http://localhost:5000/api/documents/download/collection/${selectedCollection.id}`, "_blank");
+      window.open(`https://pdf2csv-backend-2xcfwc7m6a-uc.a.run.app/api/documents/download/collection/${selectedCollection.id}`, "_blank");
     } else {
       alert("Please select a collection to download.");
     }
@@ -11,7 +11,7 @@ const Footer = ({ customer, data, isPostProcess, onToggleProcess, sortField, onC
 
   const handleExcelDownload = () => {
     if (selectedCollection) {
-      window.open(`http://localhost:5000/api/documents/download/collection/${selectedCollection.id}/excel`, "_blank");
+      window.open(`https://pdf2csv-backend-2xcfwc7m6a-uc.a.run.app/api/documents/download/collection/${selectedCollection.id}/excel`, "_blank");
     } else {
       alert("Please select a collection to download.");
     }

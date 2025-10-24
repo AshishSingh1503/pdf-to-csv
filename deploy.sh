@@ -58,7 +58,7 @@ gcloud run deploy pdf2csv-frontend \
   --platform managed \
   --region $REGION \
   --allow-unauthenticated \
-  --set-env-vars="REACT_APP_API_URL=$BACKEND_URL" \
+  --set-env-vars="VITE_API_URL=$BACKEND_URL" \
   --memory=1Gi \
   --cpu=1
 
