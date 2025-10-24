@@ -9,8 +9,8 @@ dotenv.config();
 const credentialsPath = path.resolve(process.env.GOOGLE_APPLICATION_CREDENTIALS || "");
 const outputPath = path.resolve(process.env.OUTPUT_DIR || "output");
 
-// ✅ Check if credentials file exists
-if (!fs.existsSync(credentialsPath)) {
+// ✅ Check if credentials file exists (only in development)
+if (process.env.NODE_ENV !== 'production' && !fs.existsSync(credentialsPath)) {
   console.error(`❌ Google credentials file not found at: ${credentialsPath}`);
   console.error("👉 Please set GOOGLE_APPLICATION_CREDENTIALS in your .env file correctly.\n");
   process.exit(1);
