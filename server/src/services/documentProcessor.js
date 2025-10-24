@@ -5,19 +5,15 @@ import fs from "fs";
 import path from "path";
 import { clearOutput, saveCSV, createZip } from "../utils/fileHelpers.js";
 
-// Ensure credentials file exists
-if (!fs.existsSync(config.credentials)) {
-  throw new Error(`Google credentials file not found at: ${config.credentials}`);
-}
-
 // Initialize Document AI client
 let client;
 try {
-  client = new DocumentProcessorServiceClient({
-    keyFilename: config.credentials,
-  });
+  // Use default service account in Cloud Run, or credentials file locally
+  const clientConfig = process.env.NODE_ENV === 'production' ? {} : { keyFilename: config.credentials };
+  client = new DocumentProcessorServiceClient(clientConfig);
+  console.log('✅ Document AI client initialized successfully');
 } catch (error) {
-  console.error("🔥 Failed to initialize Document AI client. Please check your Google Cloud credentials.", error);
+  console.error("🔥 Failed to initialize Document AI client:", error);
   throw new Error("Failed to initialize Document AI client. Please check your Google Cloud credentials.");
 }
 

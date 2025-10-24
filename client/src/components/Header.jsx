@@ -15,8 +15,8 @@ const Header = ({ customer, onUploadClick, selectedCollection, onCollectionChang
           <button
             className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 disabled:opacity-50"
             onClick={onUploadClick}
-            disabled={!selectedCollection}
-            title={!selectedCollection ? "Please select a collection first" : "Upload PDFs"}
+            disabled={false}
+            title="Upload PDFs"
           >
             Upload PDFs (Max 25)
           </button>
