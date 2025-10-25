@@ -4,6 +4,7 @@ import { query } from './database.js';
 export class Collection {
   constructor(data) {
     this.id = data.id;
+    this.customer_id = data.customer_id;
     this.name = data.name;
     this.description = data.description;
     this.status = data.status || 'active';
@@ -12,11 +13,18 @@ export class Collection {
   }
 
   // Get all collections
-  static async findAll() {
-    const result = await query(
-      'SELECT * FROM collections WHERE status = $1 ORDER BY created_at DESC',
-      ['active']
-    );
+  static async findAll(customerId = null) {
+    let queryText = 'SELECT * FROM collections WHERE status = $1';
+    const params = ['active'];
+
+    if (customerId) {
+      queryText += ' AND customer_id = $2';
+      params.push(customerId);
+    }
+    
+    queryText += ' ORDER BY created_at DESC';
+    
+    const result = await query(queryText, params);
     return result.rows.map(row => new Collection(row));
   }
 
@@ -30,10 +38,10 @@ export class Collection {
   }
 
   // Create new collection
-  static async create({ name, description = '' }) {
+  static async create({ name, description = '', customer_id }) {
     const result = await query(
-      'INSERT INTO collections (name, description) VALUES ($1, $2) RETURNING *',
-      [name, description]
+      'INSERT INTO collections (name, description, customer_id) VALUES ($1, $2, $3) RETURNING *',
+      [name, description, customer_id]
     );
     return new Collection(result.rows[0]);
   }

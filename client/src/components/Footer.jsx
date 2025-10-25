@@ -1,17 +1,16 @@
 import React from "react";
+import { apiClient } from "../api/apiClient";
 
 const Footer = ({ customer, data, isPostProcess, onToggleProcess, sortField, onClearSort, selectedCollection }) => {
-  const handleDownload = () => {
+  const handleDownload = (fileType) => {
     if (selectedCollection) {
-      window.open(`https://pdf2csv-backend-2xcfwc7m6a-uc.a.run.app/api/documents/download/collection/${selectedCollection.id}`, "_blank");
-    } else {
-      alert("Please select a collection to download.");
-    }
-  };
-
-  const handleExcelDownload = () => {
-    if (selectedCollection) {
-      window.open(`https://pdf2csv-backend-2xcfwc7m6a-uc.a.run.app/api/documents/download/collection/${selectedCollection.id}/excel`, "_blank");
+      const type = isPostProcess ? 'post' : 'pre';
+      let url = `${apiClient.defaults.baseURL}/documents/download/collection/${selectedCollection.id}`;
+      if(fileType === 'excel') {
+        url += '/excel';
+      }
+      url += `?type=${type}`;
+      window.open(url, "_blank");
     } else {
       alert("Please select a collection to download.");
     }
@@ -47,13 +46,13 @@ const Footer = ({ customer, data, isPostProcess, onToggleProcess, sortField, onC
         )}
         <button
           className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
-          onClick={handleDownload}
+          onClick={() => handleDownload('csv')}
         >
           Download CSV
         </button>
         <button
           className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700"
-          onClick={handleExcelDownload}
+          onClick={() => handleDownload('excel')}
         >
           Download Excel
         </button>

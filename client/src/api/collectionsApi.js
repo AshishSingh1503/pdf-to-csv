@@ -5,8 +5,10 @@ const BASE_URL = import.meta.env.VITE_API_URL ? `${import.meta.env.VITE_API_URL}
 // Collections API
 export const collectionsApi = {
   // Get all collections
-  getAll: async () => {
-    const { data } = await axios.get(`${BASE_URL}/collections`);
+  getAll: async (customerId = null) => {
+    const params = new URLSearchParams();
+    if (customerId) params.append('customerId', customerId);
+    const { data } = await axios.get(`${BASE_URL}/collections`, { params });
     return data;
   },
 

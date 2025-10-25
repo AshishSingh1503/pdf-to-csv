@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from "react";
 import { collectionsApi } from "../api/collectionsApi";
 
-const CollectionModal = ({ isOpen, onClose, onSave, collection = null, mode = 'create' }) => {
+const CollectionModal = ({ isOpen, onClose, onSave, collection = null, customer, mode = 'create' }) => {
   const [formData, setFormData] = useState({
     name: '',
-    description: ''
+    description: '',
+    customer_id: null
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -14,17 +15,19 @@ const CollectionModal = ({ isOpen, onClose, onSave, collection = null, mode = 'c
       if (mode === 'edit' && collection) {
         setFormData({
           name: collection.name || '',
-          description: collection.description || ''
+          description: collection.description || '',
+          customer_id: collection.customer_id
         });
       } else {
         setFormData({
           name: '',
-          description: ''
+          description: '',
+          customer_id: customer ? customer.id : null
         });
       }
       setError('');
     }
-  }, [isOpen, mode, collection]);
+  }, [isOpen, mode, collection, customer]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
