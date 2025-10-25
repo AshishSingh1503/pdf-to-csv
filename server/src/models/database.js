@@ -49,10 +49,23 @@ export const getClient = async () => {
 // Initialize database tables
 export const initializeDatabase = async () => {
   try {
+    // Create customers table
+    await query(`
+      CREATE TABLE IF NOT EXISTS customers (
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(255) NOT NULL,
+        email VARCHAR(255),
+        phone VARCHAR(20),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
     // Create collections table
     await query(`
       CREATE TABLE IF NOT EXISTS collections (
         id SERIAL PRIMARY KEY,
+        customer_id INTEGER REFERENCES customers(id) ON DELETE CASCADE,
         name VARCHAR(255) NOT NULL UNIQUE,
         description TEXT,
         status VARCHAR(20) DEFAULT 'active',

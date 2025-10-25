@@ -20,7 +20,7 @@ const CustomersSidebar = ({ selectedCustomer, onCustomerSelect, onCollectionSele
     try {
       setLoading(true);
       const response = await customerApi.getAll();
-      setCustomers(response.data);
+      setCustomers(response.data.data);
       setError('');
     } catch (err) {
       setError('Failed to load customers');
