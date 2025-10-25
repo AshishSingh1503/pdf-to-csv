@@ -6,7 +6,7 @@ import Header from "../components/Header";
 import ClientTable from "../components/ClientTable";
 import Pagination from "../components/Pagination";
 import Footer from "../components/Footer";
-import CollectionsSidebar from "../components/CollectionsSidebar";
+import CustomersSidebar from "../components/CustomersSidebar";
 import SearchBar from "../components/SearchBar";
 
 const Home = () => {
@@ -226,9 +226,9 @@ const Home = () => {
 
   return (
     <div className="flex h-screen bg-gray-50">
-      {/* Collections Sidebar */}
+      {/* Customers Sidebar */}
       {showCollectionsSidebar && (
-        <CollectionsSidebar
+        <CustomersSidebar
           selectedCollection={selectedCollection}
           onCollectionSelect={handleCollectionSelect}
           onRefresh={fetchData}

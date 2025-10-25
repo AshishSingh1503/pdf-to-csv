@@ -1,10 +1,11 @@
 // server/src/controllers/collectionController.js
+// import { Collection } from '../models/Collection.js';
 import { Collection } from '../models/Collection.js';
-
 // Get all collections
 export const getAllCollections = async (req, res) => {
   try {
-    const collections = await Collection.findAll();
+    const { customerId } = req.query;
+    const collections = await Collection.findAll(customerId);
     res.json({ success: true, data: collections });
   } catch (error) {
     console.error('Error fetching collections:', error);
@@ -33,10 +34,14 @@ export const getCollectionById = async (req, res) => {
 // Create new collection
 export const createCollection = async (req, res) => {
   try {
-    const { name, description } = req.body;
+    const { name, description, customer_id } = req.body;
     
     if (!name || name.trim() === '') {
       return res.status(400).json({ success: false, error: 'Collection name is required' });
+    }
+    
+    if (!customer_id) {
+      return res.status(400).json({ success: false, error: 'Customer ID is required' });
     }
     
     // Check if collection name already exists
@@ -47,7 +52,8 @@ export const createCollection = async (req, res) => {
     
     const collection = await Collection.create({
       name: name.trim(),
-      description: description?.trim() || ''
+      description: description?.trim() || '',
+      customer_id,
     });
     
     res.status(201).json({ success: true, data: collection });
