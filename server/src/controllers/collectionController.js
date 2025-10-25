@@ -50,13 +50,20 @@ export const createCollection = async (req, res) => {
       return res.status(400).json({ success: false, error: 'Collection name already exists' });
     }
     
-    const collection = await Collection.create({
-      name: name.trim(),
-      description: description?.trim() || '',
-      customer_id,
-    });
-    
-    res.status(201).json({ success: true, data: collection });
+    try {
+      const collection = await Collection.create({
+        name: name.trim(),
+        description: description?.trim() || '',
+        customer_id,
+      });
+      
+      res.status(201).json({ success: true, data: collection });
+    } catch (dbError) {
+      if (dbError.code === '23505') { // Unique violation
+        return res.status(409).json({ success: false, error: 'A collection with this name already exists.' });
+      }
+      throw dbError; // Re-throw other errors
+    }
   } catch (error) {
     console.error('Error creating collection:', error);
     res.status(500).json({ success: false, error: 'Failed to create collection' });

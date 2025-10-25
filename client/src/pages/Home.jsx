@@ -14,6 +14,7 @@ const Home = () => {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [customer, setCustomer] = useState(null);
+  const [selectedCustomer, setSelectedCustomer] = useState(null);
   const [selectedPdf, setSelectedPdf] = useState(null);
   const fileInputRef = useRef(null);
   const [currentPage, setCurrentPage] = useState(1);
@@ -132,6 +133,11 @@ const Home = () => {
     setSearchTerm('');
   };
 
+  const handleCustomerSelect = (customer) => {
+    setSelectedCustomer(customer);
+    setSelectedCollection(null); // Reset collection when customer changes
+  };
+
   const handlePdfSelect = (pdf) => {
     setSelectedPdf(pdf);
     setCurrentPage(1);
@@ -229,6 +235,8 @@ const Home = () => {
       {/* Customers Sidebar */}
       {showCollectionsSidebar && (
         <CustomersSidebar
+          selectedCustomer={selectedCustomer}
+          onCustomerSelect={handleCustomerSelect}
           selectedCollection={selectedCollection}
           onCollectionSelect={handleCollectionSelect}
           onRefresh={fetchData}

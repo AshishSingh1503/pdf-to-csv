@@ -13,12 +13,12 @@ export class Collection {
   }
 
   // Get all collections
-  static async findAll(customerId = null) {
-    let queryText = 'SELECT * FROM collections WHERE status = $1';
-    const params = ['active'];
+  static async findAll(customerId) {
+    let queryText = 'SELECT * FROM collections';
+    const params = [];
 
     if (customerId) {
-      queryText += ' AND customer_id = $2';
+      queryText += ' WHERE customer_id = $1';
       params.push(customerId);
     }
     
