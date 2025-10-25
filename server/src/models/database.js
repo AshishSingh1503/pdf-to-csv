@@ -73,6 +73,12 @@ export const initializeDatabase = async () => {
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
     `);
+    
+    // Add customer_id column to collections table if it doesn't exist
+    await query(`
+      ALTER TABLE collections
+      ADD COLUMN IF NOT EXISTS customer_id INTEGER REFERENCES customers(id) ON DELETE CASCADE
+    `);
 
     // Create pre_process_records table
     await query(`
