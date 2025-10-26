@@ -247,19 +247,91 @@ class WorkingDocumentProcessor:
         
         return address
 
+    def _clean_name(self, name: str) -> str:
+        """
+        Minimal cleaning for names:
+        - Remove weird unicode artifacts, ellipses, bullets
+        - Remove digits (including trailing zeros) and question marks
+        - Remove stray punctuation except - and '
+        - Collapse whitespace and title-case
+        """
+        if not name:
+            return ''
+        s = name.strip()
+
+        # remove common weird OCR characters
+        s = s.replace('�', '').replace('･･･', '').replace('…', '').replace('•', '')
+        s = s.replace('\u2026', '')  # ellipsis
+        # remove digits and question marks anywhere
+        s = re.sub(r'[\d\?]+', '', s)
+        # remove punctuation except letters, spaces, hyphen, apostrophe
+        s = re.sub(r"[^A-Za-zÀ-ÖØ-öø-ÿ'\-\s]", '', s)
+        # collapse multiple spaces
+        s = re.sub(r'\s+', ' ', s).strip()
+        # title-case but preserve existing internal capitalization of hyphenated names
+        parts = [p.capitalize() for p in s.split(' ')] if s else []
+        return ' '.join(parts).strip()
+
+    def _normalize_date_field(self, date_str: str) -> str:
+        """
+        Minimal OCR-tolerant date normalization.
+        Returns ISO date 'YYYY-MM-DD' or '' if unparseable.
+        Handles examples like:
+            '26Jul--1971' -> '1971-07-26'
+            '15Aug--2022' -> '2022-08-15'
+            '07Aug-2019-' -> '2019-08-07'
+            '17-Jun-1970' -> '1970-06-17'
+        """
+        if not date_str:
+            return ''
+        s = date_str.strip()
+
+        # Replace weird double hyphens and similar with single hyphen
+        s = re.sub(r'[-\u2013\u2014]+', '-', s)        # handle em/en dashes
+        s = re.sub(r'-{2,}', '-', s)                  # multiple hyphens -> single
+        # remove trailing/leading hyphens or stray non-alphanumeric except / or -
+        s = re.sub(r'^[\-\s]+|[\-\s]+$', '', s)
+        s = re.sub(r'[^0-9A-Za-z \-\/]', '', s)
+        s = s.replace('.', '-')  # dots to hyphen
+
+        # common OCR glue: 25Jul1962 -> insert hyphen between alpha and digits if needed
+        m = re.match(r'^(\d{1,2})([A-Za-z]{3,})(\d{4})$', s)
+        if m:
+            s = f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
+
+        # try parsing using pandas (dayfirst)
+        try:
+            dt = pd.to_datetime(s, dayfirst=True, errors='coerce')
+            if pd.isna(dt):
+                return ''
+            return dt.strftime('%Y-%m-%d')
+        except Exception:
+            return ''
+
     def _clean_and_validate(self, records: List[Dict]) -> List[Dict]:
         """Clean validation - mobile required, proper name format, address validation"""
         clean_records = []
         
         for record in records:
-            first_name = record.get('first_name', '').strip()
-            last_name = record.get('last_name', '').strip()
-            mobile = record.get('mobile', '').strip()  
+            # raw values from the record
+            raw_first = record.get('first_name', '').strip()
+            raw_last = record.get('last_name', '').strip()
+            raw_dob = record.get('dateofbirth', '').strip()
+            raw_lastseen = record.get('lastseen', '').strip()
+
+            # minimal cleaning requested: only clean names and normalize dates
+            first_name = self._clean_name(raw_first)
+            last_name = self._clean_name(raw_last)
+
+            # keep the original 'mobile', 'address', etc. variables as you had them
+            mobile = record.get('mobile', '').strip()
             address = record.get('address', '').strip()
             email = record.get('email', '').strip()
-            dateofbirth = record.get('dateofbirth', '').strip()
             landline = record.get('landline', '').strip()
-            lastseen = record.get('lastseen', '').strip()
+
+            # normalize date fields to ISO or empty (no other validation)
+            dateofbirth = self._normalize_date_field(raw_dob)
+            lastseen = self._normalize_date_field(raw_lastseen)
             
             if not first_name:
                 continue
