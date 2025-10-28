@@ -87,14 +87,63 @@ const fixAddressOrdering = (address) => {
     return address;
 };
 
+const cleanName = (name) => {
+  if (!name) return '';
+  let s = name.trim();
+  s = s.replace(/�|･･･|…|•|\u2026/g, '');
+  s = s.replace(/[\d?]+/g, '');
+  s = s.replace(/[^A-Za-zÀ-ÖØ-öø-ÿ'\-\s]/g, '');
+  s = s.replace(/\s+/g, ' ').trim();
+  const parts = s ? s.split(' ').map(p => p.charAt(0).toUpperCase() + p.slice(1)) : [];
+  return parts.join(' ').trim();
+};
+
+const normalizeDateField = (dateStr) => {
+    if (!dateStr) return '';
+    let s = dateStr.trim();
+    s = s.replace(/[-\u2013\u2014]+/g, '-');
+    s = s.replace(/-{2,}/g, '-');
+    s = s.replace(/^[\-\s]+|[\-\s]+$/g, '');
+    s = s.replace(/[^0-9A-Za-z\s\-\/]/g, '');
+    s = s.replace(/\./g, '-');
+
+    const match = s.match(/^(\d{1,2})([A-Za-z]{3,})(\d{4})$/);
+    if (match) {
+        s = `${match[1]}-${match[2]}-${match[3]}`;
+    }
+
+    try {
+        const dt = new Date(s);
+        if (isNaN(dt.getTime())) return '';
+        // Format to YYYY-MM-DD
+        const year = dt.getFullYear();
+        const month = String(dt.getMonth() + 1).padStart(2, '0');
+        const day = String(dt.getDate()).padStart(2, '0');
+        return `${year}-${month}-${day}`;
+    } catch (e) {
+        return '';
+    }
+};
+
 const cleanAndValidate = (records) => {
   const cleanRecords = [];
-  const seenMobiles = new Set();
 
   for (const record of records) {
-    const firstName = record.first_name?.trim() || '';
+    const rawFirst = record.first_name?.trim() || '';
+    const rawLast = record.last_name?.trim() || '';
+    const rawDob = record.dateofbirth?.trim() || '';
+    const rawLastseen = record.lastseen?.trim() || '';
+
+    const firstName = cleanName(rawFirst);
+    const lastName = cleanName(rawLast);
+
     const mobile = record.mobile?.trim() || '';
     const address = record.address?.trim() || '';
+    const email = record.email?.trim() || '';
+    const landline = record.landline?.trim() || '';
+
+    const dateofbirth = normalizeDateField(rawDob);
+    const lastseen = normalizeDateField(rawLastseen);
 
     if (!firstName || firstName.length <= 1) continue;
     if (!mobile) continue;
@@ -102,24 +151,33 @@ const cleanAndValidate = (records) => {
     const mobileDigits = mobile.replace(/\D/g, '');
     if (!(mobileDigits.length === 10 && mobileDigits.startsWith('04'))) continue;
     
-    // Address must have a number in the first 15 chars
     if (!address || !/\d/.test(address.substring(0, 15))) continue;
 
-    if (!seenMobiles.has(mobileDigits)) {
-      cleanRecords.push({
-        first_name: firstName,
-        last_name: record.last_name?.trim() || '',
-        mobile: mobileDigits,
-        address: fixAddressOrdering(address),
-        email: record.email?.trim() || '',
-        dateofbirth: record.dateofbirth?.trim() || '',
-        landline: record.landline?.trim() || '',
-        lastseen: record.lastseen?.trim() || '',
-      });
-      seenMobiles.add(mobileDigits);
+    const fixedAddress = fixAddressOrdering(address);
+
+    cleanRecords.push({
+      first_name: firstName,
+      last_name: lastName,
+      mobile: mobileDigits,
+      address: fixedAddress,
+      email: email || '',
+      dateofbirth: dateofbirth || '',
+      landline: landline || '',
+      lastseen: lastseen || '',
+    });
+  }
+
+  // Remove duplicates based on mobile
+  const uniqueRecords = [];
+  const seenMobiles = new Set();
+  for (const record of cleanRecords) {
+    if (!seenMobiles.has(record.mobile)) {
+      uniqueRecords.push(record);
+      seenMobiles.add(record.mobile);
     }
   }
-  return cleanRecords;
+
+  return uniqueRecords;
 };
 
 // --- Main Processing Function ---

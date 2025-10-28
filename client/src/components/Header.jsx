@@ -23,12 +23,9 @@ const Header = ({ customer, onUploadClick, selectedCollection, onCollectionChang
         </div>
       </div>
       
-      {/* Collection Selector */}
-      <div className="max-w-md">
-        <CollectionSelector
-          selectedCollection={selectedCollection}
-          onCollectionChange={onCollectionChange}
-        />
+      {/* Collection Name */}
+      <div>
+        <h2 className="text-lg font-semibold">{selectedCollection ? selectedCollection.name : "All Collections"}</h2>
       </div>
     </div>
   );

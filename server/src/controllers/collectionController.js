@@ -1,10 +1,11 @@
 // server/src/controllers/collectionController.js
+// import { Collection } from '../models/Collection.js';
 import { Collection } from '../models/Collection.js';
-
 // Get all collections
 export const getAllCollections = async (req, res) => {
   try {
-    const collections = await Collection.findAll();
+    const { customerId } = req.query;
+    const collections = await Collection.findAll(customerId);
     res.json({ success: true, data: collections });
   } catch (error) {
     console.error('Error fetching collections:', error);
@@ -33,10 +34,14 @@ export const getCollectionById = async (req, res) => {
 // Create new collection
 export const createCollection = async (req, res) => {
   try {
-    const { name, description } = req.body;
+    const { name, description, customer_id } = req.body;
     
     if (!name || name.trim() === '') {
       return res.status(400).json({ success: false, error: 'Collection name is required' });
+    }
+    
+    if (!customer_id) {
+      return res.status(400).json({ success: false, error: 'Customer ID is required' });
     }
     
     // Check if collection name already exists
@@ -45,12 +50,20 @@ export const createCollection = async (req, res) => {
       return res.status(400).json({ success: false, error: 'Collection name already exists' });
     }
     
-    const collection = await Collection.create({
-      name: name.trim(),
-      description: description?.trim() || ''
-    });
-    
-    res.status(201).json({ success: true, data: collection });
+    try {
+      const collection = await Collection.create({
+        name: name.trim(),
+        description: description?.trim() || '',
+        customer_id,
+      });
+      
+      res.status(201).json({ success: true, data: collection });
+    } catch (dbError) {
+      if (dbError.code === '23505') { // Unique violation
+        return res.status(409).json({ success: false, error: 'A collection with this name already exists.' });
+      }
+      throw dbError; // Re-throw other errors
+    }
   } catch (error) {
     console.error('Error creating collection:', error);
     res.status(500).json({ success: false, error: 'Failed to create collection' });

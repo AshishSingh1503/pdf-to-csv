@@ -6,7 +6,7 @@ import Header from "../components/Header";
 import ClientTable from "../components/ClientTable";
 import Pagination from "../components/Pagination";
 import Footer from "../components/Footer";
-import CollectionsSidebar from "../components/CollectionsSidebar";
+import CustomersSidebar from "../components/CustomersSidebar";
 import SearchBar from "../components/SearchBar";
 
 const Home = () => {
@@ -14,6 +14,7 @@ const Home = () => {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [customer, setCustomer] = useState(null);
+  const [selectedCustomer, setSelectedCustomer] = useState(null);
   const [selectedPdf, setSelectedPdf] = useState(null);
   const fileInputRef = useRef(null);
   const [currentPage, setCurrentPage] = useState(1);
@@ -132,6 +133,11 @@ const Home = () => {
     setSearchTerm('');
   };
 
+  const handleCustomerSelect = (customer) => {
+    setSelectedCustomer(customer);
+    setSelectedCollection(null); // Reset collection when customer changes
+  };
+
   const handlePdfSelect = (pdf) => {
     setSelectedPdf(pdf);
     setCurrentPage(1);
@@ -226,9 +232,11 @@ const Home = () => {
 
   return (
     <div className="flex h-screen bg-gray-50">
-      {/* Collections Sidebar */}
+      {/* Customers Sidebar */}
       {showCollectionsSidebar && (
-        <CollectionsSidebar
+        <CustomersSidebar
+          selectedCustomer={selectedCustomer}
+          onCustomerSelect={handleCustomerSelect}
           selectedCollection={selectedCollection}
           onCollectionSelect={handleCollectionSelect}
           onRefresh={fetchData}

@@ -137,135 +137,57 @@ export const downloadZip = (req, res) => {
     });
 };
 
-export const downloadCollectionExcels = async (req, res) => {
+const downloadCollectionFile = async (req, res, fileType) => {
   try {
     const { collectionId } = req.params;
+    const { type } = req.query;
     const collection = await Collection.findById(collectionId);
     if (!collection) {
       return res.status(404).json({ error: "Collection not found" });
     }
 
-    const preProcessRecords = await PreProcessRecord.findAll(collectionId);
-    const postProcessRecords = await PostProcessRecord.findAll(collectionId);
+    let records;
+    let fileName;
+    if (type === 'post') {
+      records = await PostProcessRecord.findAll(collectionId);
+      fileName = `post-process.${fileType}`;
+    } else {
+      records = await PreProcessRecord.findAll(collectionId);
+      fileName = `pre-process.${fileType}`;
+    }
 
     const tempDir = path.join(process.cwd(), "temp", `collection-${collectionId}`);
     if (!fs.existsSync(tempDir)) {
       fs.mkdirSync(tempDir, { recursive: true });
     }
 
-    const preProcessExcelPath = path.join(tempDir, "pre-process.xlsx");
-    const postProcessExcelPath = path.join(tempDir, "post-process.xlsx");
+    const filePath = path.join(tempDir, fileName);
 
-    const preProcessWorksheet = xlsx.utils.json_to_sheet(preProcessRecords.map(r => ({...r})));
-    const postProcessWorksheet = xlsx.utils.json_to_sheet(postProcessRecords.map(r => ({...r})));
-
-    const preProcessWorkbook = xlsx.utils.book_new();
-    xlsx.utils.book_append_sheet(preProcessWorkbook, preProcessWorksheet, "Pre-Process");
-    xlsx.writeFile(preProcessWorkbook, preProcessExcelPath);
-
-    const postProcessWorkbook = xlsx.utils.book_new();
-    xlsx.utils.book_append_sheet(postProcessWorkbook, postProcessWorksheet, "Post-Process");
-    xlsx.writeFile(postProcessWorkbook, postProcessExcelPath);
-
-    const zipPath = path.join(process.cwd(), "temp", `collection-${collectionId}.zip`);
-    const output = fs.createWriteStream(zipPath);
-    const archive = archiver("zip", { zlib: { level: 9 } });
-
-    output.on("close", () => {
-      res.download(zipPath, `${collection.name}.zip`, (err) => {
-        if (err) {
-          console.error("🔥 Error downloading file:", err);
-          res.status(500).json({ error: "Could not download the file." });
-        }
-        fs.unlinkSync(preProcessExcelPath);
-        fs.unlinkSync(postProcessExcelPath);
-        fs.unlinkSync(zipPath);
+    if (fileType === 'xlsx') {
+      const worksheet = xlsx.utils.json_to_sheet(records.map(r => ({...r})));
+      const workbook = xlsx.utils.book_new();
+      xlsx.utils.book_append_sheet(workbook, worksheet, "Data");
+      xlsx.writeFile(workbook, filePath);
+    } else {
+      const csvWriter = createObjectCsvWriter({
+        path: filePath,
+        header: Object.keys(records[0] || {}).map(key => ({id: key, title: key}))
       });
-    });
-
-    archive.pipe(output);
-    archive.file(preProcessExcelPath, { name: "pre-process.xlsx" });
-    archive.file(postProcessExcelPath, { name: "post-process.xlsx" });
-    archive.finalize();
-  } catch (err) {
-    console.error("🔥 Error in downloadCollectionExcels:", err);
-    res.status(500).json({ error: err.message });
-  }
-};
-
-export const downloadCollectionCsvs = async (req, res) => {
-  try {
-    const { collectionId } = req.params;
-    const collection = await Collection.findById(collectionId);
-    if (!collection) {
-      return res.status(404).json({ error: "Collection not found" });
+      await csvWriter.writeRecords(records);
     }
 
-    const preProcessRecords = await PreProcessRecord.findAll(collectionId);
-    const postProcessRecords = await PostProcessRecord.findAll(collectionId);
-
-    const tempDir = path.join(process.cwd(), "temp", `collection-${collectionId}`);
-    if (!fs.existsSync(tempDir)) {
-      fs.mkdirSync(tempDir, { recursive: true });
-    }
-
-    const preProcessCsvPath = path.join(tempDir, "pre-process.csv");
-    const postProcessCsvPath = path.join(tempDir, "post-process.csv");
-
-    const preProcessCsvWriter = createObjectCsvWriter({
-      path: preProcessCsvPath,
-      header: [
-        { id: "full_name", title: "Full Name" },
-        { id: "mobile", title: "Mobile" },
-        { id: "email", title: "Email" },
-        { id: "address", title: "Address" },
-        { id: "dateofbirth", title: "Date of Birth" },
-        { id: "landline", title: "Landline" },
-        { id: "lastseen", title: "Last Seen" },
-        { id: "file_name", title: "File Name" },
-      ],
+    res.download(filePath, `${collection.name}-${fileName}`, (err) => {
+      if (err) {
+        console.error("🔥 Error downloading file:", err);
+        res.status(500).json({ error: "Could not download the file." });
+      }
+      fs.unlinkSync(filePath);
     });
-
-    const postProcessCsvWriter = createObjectCsvWriter({
-      path: postProcessCsvPath,
-      header: [
-        { id: "first_name", title: "First Name" },
-        { id: "last_name", title: "Last Name" },
-        { id: "mobile", title: "Mobile" },
-        { id: "email", title: "Email" },
-        { id: "address", title: "Address" },
-        { id: "dateofbirth", title: "Date of Birth" },
-        { id: "landline", title: "Landline" },
-        { id: "lastseen", title: "Last Seen" },
-        { id: "file_name", title: "File Name" },
-      ],
-    });
-
-    await preProcessCsvWriter.writeRecords(preProcessRecords);
-    await postProcessCsvWriter.writeRecords(postProcessRecords);
-
-    const zipPath = path.join(process.cwd(), "temp", `collection-${collectionId}.zip`);
-    const output = fs.createWriteStream(zipPath);
-    const archive = archiver("zip", { zlib: { level: 9 } });
-
-    output.on("close", () => {
-      res.download(zipPath, `${collection.name}.zip`, (err) => {
-        if (err) {
-          console.error("🔥 Error downloading file:", err);
-          res.status(500).json({ error: "Could not download the file." });
-        }
-        fs.unlinkSync(preProcessCsvPath);
-        fs.unlinkSync(postProcessCsvPath);
-        fs.unlinkSync(zipPath);
-      });
-    });
-
-    archive.pipe(output);
-    archive.file(preProcessCsvPath, { name: "pre-process.csv" });
-    archive.file(postProcessCsvPath, { name: "post-process.csv" });
-    archive.finalize();
   } catch (err) {
-    console.error("🔥 Error in downloadCollectionCsvs:", err);
+    console.error(`🔥 Error in downloadCollectionFile (${fileType}):`, err);
     res.status(500).json({ error: err.message });
   }
-};
+}
+
+export const downloadCollectionExcels = (req, res) => downloadCollectionFile(req, res, 'xlsx');
+export const downloadCollectionCsvs = (req, res) => downloadCollectionFile(req, res, 'csv');
