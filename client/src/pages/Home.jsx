@@ -8,6 +8,10 @@ import Pagination from "../components/Pagination";
 import Footer from "../components/Footer";
 import CustomersSidebar from "../components/CustomersSidebar";
 import SearchBar from "../components/SearchBar";
+import DownloadButtons from "../components/DownloadButtons";
+import UploadedFilesSidebar from "../components/UploadedFilesSidebar";
+import ProgressBar from "../components/ProgressBar";
+import socket from "../services/websocket";
 
 const Home = () => {
   const [pdfs, setPdfs] = useState([]);
@@ -26,6 +30,9 @@ const Home = () => {
   const [showCollectionsSidebar, setShowCollectionsSidebar] = useState(true);
   const [totalPages, setTotalPages] = useState(1);
   const itemsPerPage = 50;
+  const [downloadLinks, setDownloadLinks] = useState(null);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
 
   const handleUpload = async (newFiles, collectionId) => {
     if (!newFiles.length) return;
@@ -41,25 +48,25 @@ const Home = () => {
       setCustomer({ name: customerName });
     }
 
-    setPdfs(prevPdfs => [...prevPdfs, ...newFiles]);
     setLoading(true);
-    
+
     try {
-      const result = await uploadAndProcess(newFiles, collectionId);
-      setData(prevData => ({
-        ...result,
-        postProcessResults: [...(prevData?.postProcessResults || []), ...result.postProcessResults],
-        preProcessResults: [...(prevData?.preProcessResults || []), ...result.preProcessResults]
-      }));
+      const result = await uploadAndProcess(newFiles, collectionId, (progressEvent) => {
+        const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+        setUploadProgress(percentCompleted);
+        if (percentCompleted === 100) {
+          setTimeout(() => {
+            setLoading(false);
+          }, 1000);
+        }
+      });
       
-      // Refresh data from database
       await fetchData();
       
-      alert(`Successfully processed ${newFiles.length} file(s) and saved to collection`);
+      alert(`Successfully uploaded ${newFiles.length} file(s) and started processing.`);
     } catch (error) {
       console.error('Upload error:', error);
       alert('Failed to process files. Please try again.');
-    } finally {
       setLoading(false);
     }
   };
@@ -79,7 +86,6 @@ const Home = () => {
     }
   };
 
-  // Fetch data from database
   const fetchData = async () => {
     try {
       setLoading(true);
@@ -117,7 +123,6 @@ const Home = () => {
     }
   };
 
-  // Load data when collection or search changes
   useEffect(() => {
     fetchData();
   }, [selectedCollection, searchTerm, currentPage, isPostProcess]);
@@ -135,7 +140,7 @@ const Home = () => {
 
   const handleCustomerSelect = (customer) => {
     setSelectedCustomer(customer);
-    setSelectedCollection(null); // Reset collection when customer changes
+    setSelectedCollection(null);
   };
 
   const handlePdfSelect = (pdf) => {
@@ -149,21 +154,19 @@ const Home = () => {
 
   const handleToggleProcess = () => {
     setIsPostProcess(!isPostProcess);
-    setCurrentPage(1); // Reset to first page when switching
-    setSortField(null); // Reset sorting when switching
+    setCurrentPage(1);
+    setSortField(null);
     setSortDirection('asc');
   };
 
   const handleSort = (field) => {
     if (sortField === field) {
-      // If clicking the same field, toggle direction
       setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
     } else {
-      // If clicking a new field, set it and default to ascending
       setSortField(field);
       setSortDirection('asc');
     }
-    setCurrentPage(1); // Reset to first page when sorting
+    setCurrentPage(1);
   };
 
   const handleClearSort = () => {
@@ -181,15 +184,12 @@ const Home = () => {
       sourceData = sourceData.filter(item => item.source === selectedPdf.name);
     }
     
-    // Apply sorting if a sort field is selected
     if (sortField) {
       sourceData = [...sourceData].sort((a, b) => {
         let aValue = a[sortField] || '';
         let bValue = b[sortField] || '';
         
-        // Handle special cases for sorting
         if (sortField === 'dob' || sortField === 'lastseen') {
-          // For date fields, try to parse as dates
           const aDate = new Date(aValue);
           const bDate = new Date(bValue);
           if (!isNaN(aDate.getTime()) && !isNaN(bDate.getTime())) {
@@ -197,12 +197,10 @@ const Home = () => {
             bValue = bDate;
           }
         } else if (sortField === 'mobile') {
-          // For mobile numbers, extract digits for comparison
           aValue = aValue.replace(/\D/g, '');
           bValue = bValue.replace(/\D/g, '');
         }
         
-        // Handle name fields differently for pre/post process
         if (isPostProcess && (sortField === 'first' || sortField === 'last')) {
           aValue = a[sortField] || '';
           bValue = b[sortField] || '';
@@ -211,7 +209,6 @@ const Home = () => {
           bValue = b.full_name || '';
         }
         
-        // Convert to strings for comparison
         aValue = String(aValue).toLowerCase();
         bValue = String(bValue).toLowerCase();
         
@@ -232,7 +229,6 @@ const Home = () => {
 
   return (
     <div className="flex h-screen bg-gray-50">
-      {/* Customers Sidebar */}
       {showCollectionsSidebar && (
         <CustomersSidebar
           selectedCustomer={selectedCustomer}
@@ -243,13 +239,13 @@ const Home = () => {
         />
       )}
       
-      {/* Main Content */}
       <div className="flex-1 flex flex-col">
         <Header 
           customer={customer} 
           onUploadClick={handleHeaderUploadClick}
           selectedCollection={selectedCollection}
           onCollectionChange={setSelectedCollection}
+          onToggleSidebar={() => setIsSidebarOpen(!isSidebarOpen)}
         />
         
         <main className="flex-1 overflow-y-auto">
@@ -263,14 +259,12 @@ const Home = () => {
               className="hidden"
             />
 
-            {/* Search Bar */}
             <SearchBar
               onSearch={handleSearch}
               placeholder="Search data..."
               disabled={loading}
             />
 
-            {/* Collection Info */}
             {selectedCollection && (
               <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
                 <h3 className="font-medium text-blue-900">{selectedCollection.name}</h3>
@@ -280,7 +274,14 @@ const Home = () => {
               </div>
             )}
 
-            {loading && <p className="mt-4 text-gray-500">Loading data...</p>}
+            {downloadLinks && <DownloadButtons links={downloadLinks} />}
+
+            {loading && (
+              <div className="mt-4">
+                <p className="text-gray-500">Uploading and processing files...</p>
+                <ProgressBar progress={uploadProgress} />
+              </div>
+            )}
 
             {data ? (
              <ClientTable 
@@ -313,6 +314,7 @@ const Home = () => {
         />
         <Pagination currentPage={currentPage} totalPages={totalPages} onPageChange={handlePageChange} />
       </div>
+      <UploadedFilesSidebar isOpen={isSidebarOpen} onClose={() => setIsSidebarOpen(false)} selectedCollection={selectedCollection} />
     </div>
   );
 };

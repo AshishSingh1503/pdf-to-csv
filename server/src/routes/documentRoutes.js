@@ -1,12 +1,15 @@
 // server/src/routes/documentRoutes.js
 import express from "express";
-import { processDocuments, downloadZip, downloadCollectionCsvs, downloadCollectionExcels } from "../controllers/documentController.js";
+import { processDocuments, downloadFile, downloadCollectionCsvs, downloadCollectionExcels, getUploadedFiles, reprocessFile, updateUploadProgress } from "../controllers/documentController.js";
 
 const router = express.Router();
 
 router.post("/process", processDocuments);
-router.get("/download", downloadZip);
+router.get("/download", downloadFile);
 router.get("/download/collection/:collectionId", downloadCollectionCsvs);
 router.get("/download/collection/:collectionId/excel", downloadCollectionExcels);
+router.get("/files/collection/:collectionId", getUploadedFiles);
+router.post("/reprocess/:fileId", reprocessFile);
+router.post("/upload/progress/:fileId", updateUploadProgress);
 
 export default router;

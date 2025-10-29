@@ -203,4 +203,17 @@ export class CloudStorageService {
       throw error;
     }
   }
+
+  static async downloadFile(fileName) {
+    const tempDir = path.join(process.cwd(), "temp");
+    if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
+    const tempPath = path.join(tempDir, path.basename(fileName));
+    try {
+      await outputBucket.file(fileName).download({ destination: tempPath });
+      return tempPath;
+    } catch (error) {
+      console.error('Error downloading file:', error);
+      throw error;
+    }
+  }
 }

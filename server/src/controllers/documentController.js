@@ -10,12 +10,14 @@ import { createObjectCsvWriter } from "csv-writer";
 import archiver from "archiver";
 import fs from "fs";
 import xlsx from "xlsx";
+import { saveFiles, createZip } from '../utils/fileHelpers.js';
+import { broadcast } from '../services/websocket.js';
 
 export const processDocuments = async (req, res) => {
   try {
     const files = req.files?.pdfs;
     const { collectionId } = req.body;
-    
+
     if (!files) {
       return res.status(400).json({ error: "No PDF files uploaded" });
     }
@@ -25,110 +27,151 @@ export const processDocuments = async (req, res) => {
     }
 
     const fileArray = Array.isArray(files) ? files : [files];
-    const { preProcessingJson, postProcessingJson, zipPath } = await processPDFs(fileArray);
 
-    // Prepare data for database insertion
-    const processingTimestamp = new Date().toISOString();
-    
-    // Format pre-process records for database
-    const preProcessRecords = preProcessingJson.raw_records.map(record => ({
-      collection_id: parseInt(collectionId),
-      full_name: record.full_name,
-      mobile: record.mobile,
-      email: record.email,
-      address: record.address,
-      dateofbirth: record.dateofbirth,
-      landline: record.landline,
-      lastseen: record.lastseen,
-      file_name: record.file_name,
-      processing_timestamp: processingTimestamp
-    }));
-
-    // Format post-process records for database
-    const postProcessRecords = postProcessingJson.filtered_records.map(record => ({
-      collection_id: parseInt(collectionId),
-      first_name: record.first_name,
-      last_name: record.last_name,
-      mobile: record.mobile,
-      email: record.email,
-      address: record.address,
-      dateofbirth: record.dateofbirth,
-      landline: record.landline,
-      lastseen: record.lastseen,
-      file_name: record.file_name,
-      processing_timestamp: processingTimestamp
-    }));
-
-    // Save to database
-    const savedPreRecords = await PreProcessRecord.bulkCreate(preProcessRecords);
-    const savedPostRecords = await PostProcessRecord.bulkCreate(postProcessRecords);
-
-    // Upload files to Cloud Storage
-    let uploadedFiles = [];
-    try {
-      uploadedFiles = await CloudStorageService.uploadProcessedFiles(fileArray, collectionId);
-      console.log(`✅ Uploaded ${uploadedFiles.length} files to Cloud Storage`);
-    } catch (error) {
-      console.error('Error uploading to Cloud Storage:', error);
-      // Continue processing even if Cloud Storage upload fails
-    }
-
-    // Save file metadata with Cloud Storage paths
-    const fileMetadataPromises = fileArray.map((file, index) => {
-      const uploadedFile = uploadedFiles[index];
+    const fileMetadataPromises = fileArray.map(file => {
       return FileMetadata.create({
         collection_id: parseInt(collectionId),
         original_filename: file.name,
-        cloud_storage_path: uploadedFile ? uploadedFile.url : null,
         file_size: file.size,
-        processing_status: 'completed'
+        processing_status: 'processing',
       });
     });
-    await Promise.all(fileMetadataPromises);
+    const fileMetadatas = await Promise.all(fileMetadataPromises);
 
-    // Format response data for frontend
-    const postProcessResults = savedPostRecords.map(record => ({
-      id: record.id,
-      first: record.first_name,
-      last: record.last_name,
-      mobile: record.mobile,
-      email: record.email,
-      address: record.address,
-      dob: record.dateofbirth,
-      seen: record.lastseen,
-      source: record.file_name || ''
-    }));
-
-    const preProcessResults = savedPreRecords.map(record => ({
-      id: record.id,
-      full_name: record.full_name,
-      mobile: record.mobile,
-      email: record.email,
-      address: record.address,
-      dob: record.dateofbirth,
-      seen: record.lastseen,
-      source: record.file_name || ''
-    }));
-    
-    res.json({ 
+    res.json({
       success: true,
-      postProcessResults: postProcessResults || [], 
-      preProcessResults: preProcessResults || [],
-      zipPath: `/api/documents/download?file=${path.basename(zipPath)}`,
-      message: `Successfully processed ${fileArray.length} file(s) and saved to collection`
+      files: fileMetadatas,
+      message: `Successfully uploaded ${fileArray.length} file(s). Processing in background.`,
     });
+
+    // Process files in the background
+    processPDFFiles(fileArray, collectionId, fileMetadatas);
+
   } catch (err) {
     console.error("🔥 Error in processDocuments:", err);
     res.status(500).json({ error: err.message });
   }
 };
 
-export const downloadZip = (req, res) => {
-    const { file } = req.query;
-    if (!file) {
-        return res.status(400).json({ error: "No file specified for download." });
+const processPDFFiles = async (fileArray, collectionId, fileMetadatas) => {
+  for (let i = 0; i < fileArray.length; i++) {
+    const file = fileArray[i];
+    const fileMetadata = fileMetadatas[i];
+    try {
+      const sessionDir = path.join(process.cwd(), "output", `session_${Date.now()}`);
+      fs.mkdirSync(sessionDir, { recursive: true });
+
+      const {
+        allRawRecords,
+        allFilteredRecords,
+      } = await processPDFs([file], sessionDir);
+
+      const processingTimestamp = new Date().toISOString();
+
+      const preProcessRecords = allRawRecords.map(record => ({
+        collection_id: parseInt(collectionId),
+        ...record,
+        processing_timestamp: processingTimestamp
+      }));
+
+      const postProcessRecords = allFilteredRecords.map(record => ({
+        collection_id: parseInt(collectionId),
+        ...record,
+        processing_timestamp: processingTimestamp
+      }));
+
+      await PreProcessRecord.bulkCreate(preProcessRecords);
+      await PostProcessRecord.bulkCreate(postProcessRecords);
+
+      const uploadedFile = await CloudStorageService.uploadProcessedFiles([file], collectionId);
+      await fileMetadata.updateStatus('completed');
+      await fileMetadata.updateCloudStoragePath(uploadedFile[0].url);
+
+      broadcast({ type: 'FILE_PROCESSED', fileMetadata });
+
+    } catch (error) {
+      console.error(`🔥 Error processing file ${file.name}:`, error);
+      await fileMetadata.updateStatus('failed');
+      broadcast({ type: 'FILE_PROCESSED', fileMetadata });
     }
-    const filePath = path.join(process.cwd(), "output", file);
+  }
+};
+
+export const updateUploadProgress = async (req, res) => {
+  try {
+    const { fileId } = req.params;
+    const { progress } = req.body;
+    const fileMetadata = await FileMetadata.findById(fileId);
+    if (!fileMetadata) {
+      return res.status(404).json({ error: 'File not found' });
+    }
+    await fileMetadata.updateUploadProgress(progress);
+    broadcast({ type: 'UPLOAD_PROGRESS', fileId, progress });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('🔥 Error in updateUploadProgress:', err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+export const reprocessFile = async (req, res) => {
+  try {
+    const { fileId } = req.params;
+    const fileMetadata = await FileMetadata.findById(fileId);
+    if (!fileMetadata) {
+      return res.status(404).json({ error: 'File not found' });
+    }
+
+    const tempPath = await CloudStorageService.downloadFile(fileMetadata.cloud_storage_path);
+    const file = {
+      name: fileMetadata.original_filename,
+      mv: async (path) => {
+        fs.renameSync(tempPath, path);
+      },
+    };
+
+    const {
+      allRawRecords,
+      allFilteredRecords,
+    } = await processPDFs([file]);
+
+    await PreProcessRecord.deleteByFileName(fileMetadata.original_filename);
+    await PostProcessRecord.deleteByFileName(fileMetadata.original_filename);
+
+    const processingTimestamp = new Date().toISOString();
+
+    const preProcessRecords = allRawRecords.map(record => ({
+      collection_id: fileMetadata.collection_id,
+      ...record,
+      processing_timestamp: processingTimestamp,
+    }));
+
+    const postProcessRecords = allFilteredRecords.map(record => ({
+      collection_id: fileMetadata.collection_id,
+      ...record,
+      processing_timestamp: processingTimestamp,
+    }));
+
+    await PreProcessRecord.bulkCreate(preProcessRecords);
+    await PostProcessRecord.bulkCreate(postProcessRecords);
+
+    await fileMetadata.updateStatus('completed');
+
+    broadcast({ type: 'FILE_REPROCESSED', collectionId: fileMetadata.collection_id });
+
+    res.json({ success: true, message: `File ${fileId} has been reprocessed.` });
+  } catch (err) {
+    console.error('🔥 Error in reprocessFile:', err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+export const downloadFile = (req, res) => {
+    const { session, file } = req.query;
+    if (!session || !file) {
+        return res.status(400).json({ error: "Session and file are required for download." });
+    }
+    const filePath = path.join(process.cwd(), "output", session, file);
     res.download(filePath, (err) => {
         if (err) {
             console.error("🔥 Error downloading file:", err);
@@ -191,3 +234,14 @@ const downloadCollectionFile = async (req, res, fileType) => {
 
 export const downloadCollectionExcels = (req, res) => downloadCollectionFile(req, res, 'xlsx');
 export const downloadCollectionCsvs = (req, res) => downloadCollectionFile(req, res, 'csv');
+
+export const getUploadedFiles = async (req, res) => {
+  try {
+    const { collectionId } = req.params;
+    const files = await FileMetadata.findAll(collectionId);
+    res.json({ success: true, data: files });
+  } catch (err) {
+    console.error('🔥 Error in getUploadedFiles:', err);
+    res.status(500).json({ error: err.message });
+  }
+};
