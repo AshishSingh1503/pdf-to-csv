@@ -126,8 +126,15 @@ export const initializeDatabase = async () => {
         cloud_storage_path VARCHAR(500),
         file_size BIGINT,
         processing_status VARCHAR(20) DEFAULT 'processing',
+        upload_progress INTEGER DEFAULT 0,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
+    `);
+
+    // Add upload_progress column if it doesn't exist
+    await query(`
+      ALTER TABLE file_metadata
+      ADD COLUMN IF NOT EXISTS upload_progress INTEGER DEFAULT 0
     `);
 
     // Create indexes for performance

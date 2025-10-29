@@ -48,29 +48,25 @@ const Home = () => {
       setCustomer({ name: customerName });
     }
 
-    setPdfs(prevPdfs => [...prevPdfs, ...newFiles]);
     setLoading(true);
-    setUploadProgress(0);
-    
+
     try {
       const result = await uploadAndProcess(newFiles, collectionId, (progressEvent) => {
         const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
         setUploadProgress(percentCompleted);
+        if (percentCompleted === 100) {
+          setTimeout(() => {
+            setLoading(false);
+          }, 1000);
+        }
       });
-      setData(prevData => ({
-        ...result,
-        postProcessResults: [...(prevData?.postProcessResults || []), ...result.postProcessResults],
-        preProcessResults: [...(prevData?.preProcessResults || []), ...result.preProcessResults]
-      }));
-      setDownloadLinks(result.downloadLinks);
       
       await fetchData();
       
-      alert(`Successfully processed ${newFiles.length} file(s) and saved to collection`);
+      alert(`Successfully uploaded ${newFiles.length} file(s) and started processing.`);
     } catch (error) {
       console.error('Upload error:', error);
       alert('Failed to process files. Please try again.');
-    } finally {
       setLoading(false);
     }
   };

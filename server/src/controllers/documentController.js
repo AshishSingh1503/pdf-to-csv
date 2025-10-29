@@ -17,7 +17,7 @@ export const processDocuments = async (req, res) => {
   try {
     const files = req.files?.pdfs;
     const { collectionId } = req.body;
-    
+
     if (!files) {
       return res.status(400).json({ error: "No PDF files uploaded" });
     }
@@ -27,118 +27,89 @@ export const processDocuments = async (req, res) => {
     }
 
     const fileArray = Array.isArray(files) ? files : [files];
-    const sessionDir = path.join(process.cwd(), "output", `session_${Date.now()}`);
-    fs.mkdirSync(sessionDir, { recursive: true });
 
-    const { 
-      allRawRecords, 
-      allFilteredRecords, 
-      allPreProcessingJson, 
-      allPostProcessingJson 
-    } = await processPDFs(fileArray, sessionDir);
-
-    await saveFiles(
-      allRawRecords, 
-      allFilteredRecords, 
-      allPreProcessingJson, 
-      allPostProcessingJson, 
-      sessionDir
-    );
-    const zipPath = await createZip(sessionDir);
-
-    const processingTimestamp = new Date().toISOString();
-    
-    const preProcessRecords = allRawRecords.map(record => ({
-      collection_id: parseInt(collectionId),
-      full_name: `${record.first_name || ''} ${record.last_name || ''}`.trim(),
-      mobile: record.mobile,
-      email: record.email,
-      address: record.address,
-      dateofbirth: record.dateofbirth,
-      landline: record.landline,
-      lastseen: record.lastseen,
-      file_name: record.file_name,
-      processing_timestamp: processingTimestamp
-    }));
-
-    const postProcessRecords = allFilteredRecords.map(record => ({
-      collection_id: parseInt(collectionId),
-      first_name: record.first_name,
-      last_name: record.last_name,
-      mobile: record.mobile,
-      email: record.email,
-      address: record.address,
-      dateofbirth: record.dateofbirth,
-      landline: record.landline,
-      lastseen: record.lastseen,
-      file_name: record.file_name,
-      processing_timestamp: processingTimestamp
-    }));
-
-    const savedPreRecords = await PreProcessRecord.bulkCreate(preProcessRecords);
-    const savedPostRecords = await PostProcessRecord.bulkCreate(postProcessRecords);
-
-    let uploadedFiles = [];
-    try {
-      uploadedFiles = await CloudStorageService.uploadProcessedFiles(fileArray, collectionId);
-    } catch (error) {
-      console.error('Error uploading to Cloud Storage:', error);
-    }
-
-    const fileMetadataPromises = fileArray.map((file, index) => {
-      const uploadedFile = uploadedFiles[index];
+    const fileMetadataPromises = fileArray.map(file => {
       return FileMetadata.create({
         collection_id: parseInt(collectionId),
         original_filename: file.name,
-        cloud_storage_path: uploadedFile ? uploadedFile.url : null,
         file_size: file.size,
-        processing_status: 'completed'
+        processing_status: 'processing',
       });
     });
-    await Promise.all(fileMetadataPromises);
+    const fileMetadatas = await Promise.all(fileMetadataPromises);
 
-    broadcast({ type: 'FILES_PROCESSED', collectionId });
-
-    const postProcessResults = savedPostRecords.map(record => ({
-      id: record.id,
-      first: record.first_name,
-      last: record.last_name,
-      mobile: record.mobile,
-      email: record.email,
-      address: record.address,
-      dob: record.dateofbirth,
-      seen: record.lastseen,
-      source: record.file_name || ''
-    }));
-
-    const preProcessResults = savedPreRecords.map(record => ({
-      id: record.id,
-      full_name: record.full_name,
-      mobile: record.mobile,
-      email: record.email,
-      address: record.address,
-      dob: record.dateofbirth,
-      seen: record.lastseen,
-      source: record.file_name || ''
-    }));
-    
-    res.json({ 
+    res.json({
       success: true,
-      postProcessResults: postProcessResults || [], 
-      preProcessResults: preProcessResults || [],
-      downloadLinks: {
-        zip: `/api/documents/download?session=${path.basename(sessionDir)}&file=archive.zip`,
-        rawCsv: `/api/documents/download?session=${path.basename(sessionDir)}&file=raw_data.csv`,
-        filteredCsv: `/api/documents/download?session=${path.basename(sessionDir)}&file=filtered_data.csv`,
-        rawExcel: `/api/documents/download?session=${path.basename(sessionDir)}&file=raw_data.xlsx`,
-        filteredExcel: `/api/documents/download?session=${path.basename(sessionDir)}&file=filtered_data.xlsx`,
-        combinedPreJson: `/api/documents/download?session=${path.basename(sessionDir)}&file=combined_pre_processing.json`,
-        combinedPostJson: `/api/documents/download?session=${path.basename(sessionDir)}&file=combined_post_processing.json`,
-      },
-      message: `Successfully processed ${fileArray.length} file(s) and saved to collection`
+      files: fileMetadatas,
+      message: `Successfully uploaded ${fileArray.length} file(s). Processing in background.`,
     });
+
+    // Process files in the background
+    processPDFFiles(fileArray, collectionId, fileMetadatas);
+
   } catch (err) {
     console.error("🔥 Error in processDocuments:", err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+const processPDFFiles = async (fileArray, collectionId, fileMetadatas) => {
+  for (let i = 0; i < fileArray.length; i++) {
+    const file = fileArray[i];
+    const fileMetadata = fileMetadatas[i];
+    try {
+      const sessionDir = path.join(process.cwd(), "output", `session_${Date.now()}`);
+      fs.mkdirSync(sessionDir, { recursive: true });
+
+      const {
+        allRawRecords,
+        allFilteredRecords,
+      } = await processPDFs([file], sessionDir);
+
+      const processingTimestamp = new Date().toISOString();
+
+      const preProcessRecords = allRawRecords.map(record => ({
+        collection_id: parseInt(collectionId),
+        ...record,
+        processing_timestamp: processingTimestamp
+      }));
+
+      const postProcessRecords = allFilteredRecords.map(record => ({
+        collection_id: parseInt(collectionId),
+        ...record,
+        processing_timestamp: processingTimestamp
+      }));
+
+      await PreProcessRecord.bulkCreate(preProcessRecords);
+      await PostProcessRecord.bulkCreate(postProcessRecords);
+
+      const uploadedFile = await CloudStorageService.uploadProcessedFiles([file], collectionId);
+      await fileMetadata.updateStatus('completed');
+      await fileMetadata.updateCloudStoragePath(uploadedFile[0].url);
+
+      broadcast({ type: 'FILE_PROCESSED', fileMetadata });
+
+    } catch (error) {
+      console.error(`🔥 Error processing file ${file.name}:`, error);
+      await fileMetadata.updateStatus('failed');
+      broadcast({ type: 'FILE_PROCESSED', fileMetadata });
+    }
+  }
+};
+
+export const updateUploadProgress = async (req, res) => {
+  try {
+    const { fileId } = req.params;
+    const { progress } = req.body;
+    const fileMetadata = await FileMetadata.findById(fileId);
+    if (!fileMetadata) {
+      return res.status(404).json({ error: 'File not found' });
+    }
+    await fileMetadata.updateUploadProgress(progress);
+    broadcast({ type: 'UPLOAD_PROGRESS', fileId, progress });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('🔥 Error in updateUploadProgress:', err);
     res.status(500).json({ error: err.message });
   }
 };

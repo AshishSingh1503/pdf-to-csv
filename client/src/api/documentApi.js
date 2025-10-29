@@ -23,3 +23,8 @@ export const reprocessFile = async (fileId) => {
   const { data } = await axios.post(`${BASE_URL}/reprocess/${fileId}`);
   return data;
 };
+
+export const updateUploadProgress = async (fileId, progress) => {
+  const { data } = await axios.post(`${BASE_URL}/upload/progress/${fileId}`, { progress });
+  return data;
+};

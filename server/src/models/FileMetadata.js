@@ -9,6 +9,7 @@ export class FileMetadata {
     this.cloud_storage_path = data.cloud_storage_path;
     this.file_size = data.file_size;
     this.processing_status = data.processing_status;
+    this.upload_progress = data.upload_progress;
     this.created_at = data.created_at;
   }
 
@@ -19,15 +20,16 @@ export class FileMetadata {
       original_filename,
       cloud_storage_path,
       file_size,
-      processing_status = 'processing'
+      processing_status = 'processing',
+      upload_progress = 0
     } = metadata;
 
     const result = await query(
       `INSERT INTO file_metadata 
-       (collection_id, original_filename, cloud_storage_path, file_size, processing_status)
-       VALUES ($1, $2, $3, $4, $5)
+       (collection_id, original_filename, cloud_storage_path, file_size, processing_status, upload_progress)
+       VALUES ($1, $2, $3, $4, $5, $6)
        RETURNING *`,
-      [collection_id, original_filename, cloud_storage_path, file_size, processing_status]
+      [collection_id, original_filename, cloud_storage_path, file_size, processing_status, upload_progress]
     );
     return new FileMetadata(result.rows[0]);
   }
@@ -40,6 +42,30 @@ export class FileMetadata {
     );
     if (result.rows.length > 0) {
       this.processing_status = status;
+      return this;
+    }
+    return null;
+  }
+
+  async updateCloudStoragePath(path) {
+    const result = await query(
+      'UPDATE file_metadata SET cloud_storage_path = $1 WHERE id = $2 RETURNING *',
+      [path, this.id]
+    );
+    if (result.rows.length > 0) {
+      this.cloud_storage_path = path;
+      return this;
+    }
+    return null;
+  }
+
+  async updateUploadProgress(progress) {
+    const result = await query(
+      'UPDATE file_metadata SET upload_progress = $1 WHERE id = $2 RETURNING *',
+      [progress, this.id]
+    );
+    if (result.rows.length > 0) {
+      this.upload_progress = progress;
       return this;
     }
     return null;

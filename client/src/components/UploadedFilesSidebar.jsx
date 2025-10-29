@@ -2,6 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { getUploadedFiles, reprocessFile } from '../api/documentApi';
 import socket from '../services/websocket';
+import ProgressBar from './ProgressBar';
 
 const UploadedFilesSidebar = ({ isOpen, onClose, selectedCollection }) => {
   const [files, setFiles] = useState([]);
@@ -21,6 +22,16 @@ const UploadedFilesSidebar = ({ isOpen, onClose, selectedCollection }) => {
       }
       if (message.type === 'FILE_REPROCESSED' && message.collectionId === selectedCollection?.id) {
         fetchFiles();
+      }
+      if (message.type === 'UPLOAD_PROGRESS') {
+        setFiles(prevFiles => {
+          return prevFiles.map(file => {
+            if (file.id === message.fileId) {
+              return { ...file, upload_progress: message.progress };
+            }
+            return file;
+          });
+        });
       }
     };
   }, [selectedCollection]);
@@ -112,6 +123,11 @@ const UploadedFilesSidebar = ({ isOpen, onClose, selectedCollection }) => {
                   </span>
                 </div>
               </div>
+              {file.processing_status === 'processing' && (
+                <div className="mt-2">
+                  <ProgressBar progress={file.upload_progress} />
+                </div>
+              )}
             </div>
           ))}
         </div>
