@@ -10,6 +10,7 @@ import { createObjectCsvWriter } from "csv-writer";
 import archiver from "archiver";
 import fs from "fs";
 import xlsx from "xlsx";
+import { saveFiles, createZip } from '../utils/fileHelpers.js';
 
 export const processDocuments = async (req, res) => {
   try {
@@ -25,15 +26,30 @@ export const processDocuments = async (req, res) => {
     }
 
     const fileArray = Array.isArray(files) ? files : [files];
-    const { preProcessingJson, postProcessingJson, zipPath } = await processPDFs(fileArray);
+    const sessionDir = path.join(process.cwd(), "output", `session_${Date.now()}`);
+    fs.mkdirSync(sessionDir, { recursive: true });
 
-    // Prepare data for database insertion
+    const { 
+      allRawRecords, 
+      allFilteredRecords, 
+      allPreProcessingJson, 
+      allPostProcessingJson 
+    } = await processPDFs(fileArray, sessionDir);
+
+    await saveFiles(
+      allRawRecords, 
+      allFilteredRecords, 
+      allPreProcessingJson, 
+      allPostProcessingJson, 
+      sessionDir
+    );
+    const zipPath = await createZip(sessionDir);
+
     const processingTimestamp = new Date().toISOString();
     
-    // Format pre-process records for database
-    const preProcessRecords = preProcessingJson.raw_records.map(record => ({
+    const preProcessRecords = allRawRecords.map(record => ({
       collection_id: parseInt(collectionId),
-      full_name: record.full_name,
+      full_name: `${record.first_name || ''} ${record.last_name || ''}`.trim(),
       mobile: record.mobile,
       email: record.email,
       address: record.address,
@@ -44,8 +60,7 @@ export const processDocuments = async (req, res) => {
       processing_timestamp: processingTimestamp
     }));
 
-    // Format post-process records for database
-    const postProcessRecords = postProcessingJson.filtered_records.map(record => ({
+    const postProcessRecords = allFilteredRecords.map(record => ({
       collection_id: parseInt(collectionId),
       first_name: record.first_name,
       last_name: record.last_name,
@@ -59,21 +74,16 @@ export const processDocuments = async (req, res) => {
       processing_timestamp: processingTimestamp
     }));
 
-    // Save to database
     const savedPreRecords = await PreProcessRecord.bulkCreate(preProcessRecords);
     const savedPostRecords = await PostProcessRecord.bulkCreate(postProcessRecords);
 
-    // Upload files to Cloud Storage
     let uploadedFiles = [];
     try {
       uploadedFiles = await CloudStorageService.uploadProcessedFiles(fileArray, collectionId);
-      console.log(`✅ Uploaded ${uploadedFiles.length} files to Cloud Storage`);
     } catch (error) {
       console.error('Error uploading to Cloud Storage:', error);
-      // Continue processing even if Cloud Storage upload fails
     }
 
-    // Save file metadata with Cloud Storage paths
     const fileMetadataPromises = fileArray.map((file, index) => {
       const uploadedFile = uploadedFiles[index];
       return FileMetadata.create({
@@ -86,7 +96,6 @@ export const processDocuments = async (req, res) => {
     });
     await Promise.all(fileMetadataPromises);
 
-    // Format response data for frontend
     const postProcessResults = savedPostRecords.map(record => ({
       id: record.id,
       first: record.first_name,
@@ -114,7 +123,15 @@ export const processDocuments = async (req, res) => {
       success: true,
       postProcessResults: postProcessResults || [], 
       preProcessResults: preProcessResults || [],
-      zipPath: `/api/documents/download?file=${path.basename(zipPath)}`,
+      downloadLinks: {
+        zip: `/api/documents/download?session=${path.basename(sessionDir)}&file=archive.zip`,
+        rawCsv: `/api/documents/download?session=${path.basename(sessionDir)}&file=raw_data.csv`,
+        filteredCsv: `/api/documents/download?session=${path.basename(sessionDir)}&file=filtered_data.csv`,
+        rawExcel: `/api/documents/download?session=${path.basename(sessionDir)}&file=raw_data.xlsx`,
+        filteredExcel: `/api/documents/download?session=${path.basename(sessionDir)}&file=filtered_data.xlsx`,
+        combinedPreJson: `/api/documents/download?session=${path.basename(sessionDir)}&file=combined_pre_processing.json`,
+        combinedPostJson: `/api/documents/download?session=${path.basename(sessionDir)}&file=combined_post_processing.json`,
+      },
       message: `Successfully processed ${fileArray.length} file(s) and saved to collection`
     });
   } catch (err) {
@@ -123,12 +140,12 @@ export const processDocuments = async (req, res) => {
   }
 };
 
-export const downloadZip = (req, res) => {
-    const { file } = req.query;
-    if (!file) {
-        return res.status(400).json({ error: "No file specified for download." });
+export const downloadFile = (req, res) => {
+    const { session, file } = req.query;
+    if (!session || !file) {
+        return res.status(400).json({ error: "Session and file are required for download." });
     }
-    const filePath = path.join(process.cwd(), "output", file);
+    const filePath = path.join(process.cwd(), "output", session, file);
     res.download(filePath, (err) => {
         if (err) {
             console.error("🔥 Error downloading file:", err);
