@@ -33,7 +33,7 @@ const ClientTable = ({ data, isPostProcess, sortField, sortDirection, onSort }) 
   };
 
   return (
-    <div className="p-4">
+    <div className="p-4 overflow-x-auto">
       <table className="min-w-full bg-white">
         <thead>
           <tr>
