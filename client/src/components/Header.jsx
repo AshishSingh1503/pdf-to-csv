@@ -1,7 +1,7 @@
 import React from "react";
 import CollectionSelector from "./CollectionSelector";
 
-const Header = ({ customer, onUploadClick, selectedCollection, onCollectionChange }) => {
+const Header = ({ customer, onUploadClick, selectedCollection, onCollectionChange, onToggleSidebar }) => {
   return (
     <div className="bg-white p-4 border-b border-gray-200">
       <div className="flex justify-between items-center mb-4">
@@ -13,12 +13,18 @@ const Header = ({ customer, onUploadClick, selectedCollection, onCollectionChang
             </select>
           )}
           <button
+            className="bg-gray-600 text-white px-4 py-2 rounded hover:bg-gray-700"
+            onClick={onToggleSidebar}
+          >
+            Uploaded Document
+          </button>
+          <button
             className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 disabled:opacity-50"
             onClick={onUploadClick}
             disabled={false}
             title="Upload PDFs"
           >
-            Upload PDFs (Max 25)
+            Upload PDFs
           </button>
         </div>
       </div>

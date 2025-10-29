@@ -9,6 +9,9 @@ import Footer from "../components/Footer";
 import CustomersSidebar from "../components/CustomersSidebar";
 import SearchBar from "../components/SearchBar";
 import DownloadButtons from "../components/DownloadButtons";
+import UploadedFilesSidebar from "../components/UploadedFilesSidebar";
+import ProgressBar from "../components/ProgressBar";
+import socket from "../services/websocket";
 
 const Home = () => {
   const [pdfs, setPdfs] = useState([]);
@@ -28,6 +31,8 @@ const Home = () => {
   const [totalPages, setTotalPages] = useState(1);
   const itemsPerPage = 50;
   const [downloadLinks, setDownloadLinks] = useState(null);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
 
   const handleUpload = async (newFiles, collectionId) => {
     if (!newFiles.length) return;
@@ -45,9 +50,13 @@ const Home = () => {
 
     setPdfs(prevPdfs => [...prevPdfs, ...newFiles]);
     setLoading(true);
+    setUploadProgress(0);
     
     try {
-      const result = await uploadAndProcess(newFiles, collectionId);
+      const result = await uploadAndProcess(newFiles, collectionId, (progressEvent) => {
+        const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+        setUploadProgress(percentCompleted);
+      });
       setData(prevData => ({
         ...result,
         postProcessResults: [...(prevData?.postProcessResults || []), ...result.postProcessResults],
@@ -240,6 +249,7 @@ const Home = () => {
           onUploadClick={handleHeaderUploadClick}
           selectedCollection={selectedCollection}
           onCollectionChange={setSelectedCollection}
+          onToggleSidebar={() => setIsSidebarOpen(!isSidebarOpen)}
         />
         
         <main className="flex-1 overflow-y-auto">
@@ -270,7 +280,12 @@ const Home = () => {
 
             {downloadLinks && <DownloadButtons links={downloadLinks} />}
 
-            {loading && <p className="mt-4 text-gray-500">Loading data...</p>}
+            {loading && (
+              <div className="mt-4">
+                <p className="text-gray-500">Uploading and processing files...</p>
+                <ProgressBar progress={uploadProgress} />
+              </div>
+            )}
 
             {data ? (
              <ClientTable 
@@ -303,6 +318,7 @@ const Home = () => {
         />
         <Pagination currentPage={currentPage} totalPages={totalPages} onPageChange={handlePageChange} />
       </div>
+      <UploadedFilesSidebar isOpen={isSidebarOpen} onClose={() => setIsSidebarOpen(false)} selectedCollection={selectedCollection} />
     </div>
   );
 };

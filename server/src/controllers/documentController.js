@@ -11,6 +11,7 @@ import archiver from "archiver";
 import fs from "fs";
 import xlsx from "xlsx";
 import { saveFiles, createZip } from '../utils/fileHelpers.js';
+import { broadcast } from '../services/websocket.js';
 
 export const processDocuments = async (req, res) => {
   try {
@@ -96,6 +97,8 @@ export const processDocuments = async (req, res) => {
     });
     await Promise.all(fileMetadataPromises);
 
+    broadcast({ type: 'FILES_PROCESSED', collectionId });
+
     const postProcessResults = savedPostRecords.map(record => ({
       id: record.id,
       first: record.first_name,
@@ -136,6 +139,58 @@ export const processDocuments = async (req, res) => {
     });
   } catch (err) {
     console.error("🔥 Error in processDocuments:", err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+export const reprocessFile = async (req, res) => {
+  try {
+    const { fileId } = req.params;
+    const fileMetadata = await FileMetadata.findById(fileId);
+    if (!fileMetadata) {
+      return res.status(404).json({ error: 'File not found' });
+    }
+
+    const tempPath = await CloudStorageService.downloadFile(fileMetadata.cloud_storage_path);
+    const file = {
+      name: fileMetadata.original_filename,
+      mv: async (path) => {
+        fs.renameSync(tempPath, path);
+      },
+    };
+
+    const {
+      allRawRecords,
+      allFilteredRecords,
+    } = await processPDFs([file]);
+
+    await PreProcessRecord.deleteByFileName(fileMetadata.original_filename);
+    await PostProcessRecord.deleteByFileName(fileMetadata.original_filename);
+
+    const processingTimestamp = new Date().toISOString();
+
+    const preProcessRecords = allRawRecords.map(record => ({
+      collection_id: fileMetadata.collection_id,
+      ...record,
+      processing_timestamp: processingTimestamp,
+    }));
+
+    const postProcessRecords = allFilteredRecords.map(record => ({
+      collection_id: fileMetadata.collection_id,
+      ...record,
+      processing_timestamp: processingTimestamp,
+    }));
+
+    await PreProcessRecord.bulkCreate(preProcessRecords);
+    await PostProcessRecord.bulkCreate(postProcessRecords);
+
+    await fileMetadata.updateStatus('completed');
+
+    broadcast({ type: 'FILE_REPROCESSED', collectionId: fileMetadata.collection_id });
+
+    res.json({ success: true, message: `File ${fileId} has been reprocessed.` });
+  } catch (err) {
+    console.error('🔥 Error in reprocessFile:', err);
     res.status(500).json({ error: err.message });
   }
 };
@@ -208,3 +263,14 @@ const downloadCollectionFile = async (req, res, fileType) => {
 
 export const downloadCollectionExcels = (req, res) => downloadCollectionFile(req, res, 'xlsx');
 export const downloadCollectionCsvs = (req, res) => downloadCollectionFile(req, res, 'csv');
+
+export const getUploadedFiles = async (req, res) => {
+  try {
+    const { collectionId } = req.params;
+    const files = await FileMetadata.findAll(collectionId);
+    res.json({ success: true, data: files });
+  } catch (err) {
+    console.error('🔥 Error in getUploadedFiles:', err);
+    res.status(500).json({ error: err.message });
+  }
+};

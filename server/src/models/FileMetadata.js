@@ -70,6 +70,14 @@ export class FileMetadata {
     return result.rows.map(row => new FileMetadata(row));
   }
 
+  static async findById(id) {
+    const result = await query(
+      'SELECT * FROM file_metadata WHERE id = $1',
+      [id]
+    );
+    return result.rows.length ? new FileMetadata(result.rows[0]) : null;
+  }
+
   // Delete files by collection ID
   static async deleteByCollectionId(collectionId) {
     const result = await query(

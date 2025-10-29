@@ -184,4 +184,12 @@ export class PostProcessRecord {
     );
     return result.rowCount;
   }
+
+  static async deleteByFileName(fileName) {
+    const result = await query(
+      'DELETE FROM post_process_records WHERE file_name = $1',
+      [fileName]
+    );
+    return result.rowCount;
+  }
 }
