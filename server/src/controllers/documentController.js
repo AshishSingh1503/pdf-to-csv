@@ -12,6 +12,7 @@ import fs from "fs";
 import xlsx from "xlsx";
 import { saveFiles, createZip } from '../utils/fileHelpers.js';
 import { broadcast } from '../services/websocket.js';
+import pLimit from 'p-limit';
 
 export const processDocuments = async (req, res) => {
   try {
@@ -54,47 +55,86 @@ export const processDocuments = async (req, res) => {
 };
 
 const processPDFFiles = async (fileArray, collectionId, fileMetadatas) => {
-  for (let i = 0; i < fileArray.length; i++) {
-    const file = fileArray[i];
-    const fileMetadata = fileMetadatas[i];
-    try {
-      const sessionDir = path.join(process.cwd(), "output", `session_${Date.now()}`);
-      fs.mkdirSync(sessionDir, { recursive: true });
+  const limit = pLimit(5); // Limit to 5 concurrent processing tasks
+  let processedCount = 0;
+  const totalFiles = fileArray.length;
+  const processingTimes = [];
 
-      const {
-        allRawRecords,
-        allFilteredRecords,
-      } = await processPDFs([file], sessionDir);
+  const processingPromises = fileArray.map((file, i) => {
+    return limit(async () => {
+      const fileMetadata = fileMetadatas[i];
+      const startTime = Date.now();
+      try {
+        // First, upload the file to cloud storage
+        const uploadedFile = await CloudStorageService.uploadProcessedFiles([file], collectionId);
+        await fileMetadata.updateCloudStoragePath(uploadedFile[0].url);
 
-      const processingTimestamp = new Date().toISOString();
+        const sessionDir = path.join(process.cwd(), "output", `session_${Date.now()}`);
+        fs.mkdirSync(sessionDir, { recursive: true });
 
-      const preProcessRecords = allRawRecords.map(record => ({
-        collection_id: parseInt(collectionId),
-        ...record,
-        processing_timestamp: processingTimestamp
-      }));
+        const {
+          allRawRecords,
+          allFilteredRecords,
+        } = await processPDFs([file], sessionDir);
 
-      const postProcessRecords = allFilteredRecords.map(record => ({
-        collection_id: parseInt(collectionId),
-        ...record,
-        processing_timestamp: processingTimestamp
-      }));
+        const processingTimestamp = new Date().toISOString();
 
-      await PreProcessRecord.bulkCreate(preProcessRecords);
-      await PostProcessRecord.bulkCreate(postProcessRecords);
+        const preProcessRecords = allRawRecords.map(record => ({
+          collection_id: parseInt(collectionId),
+          ...record,
+          processing_timestamp: processingTimestamp
+        }));
 
-      const uploadedFile = await CloudStorageService.uploadProcessedFiles([file], collectionId);
-      await fileMetadata.updateStatus('completed');
-      await fileMetadata.updateCloudStoragePath(uploadedFile[0].url);
+        const postProcessRecords = allFilteredRecords.map(record => ({
+          collection_id: parseInt(collectionId),
+          ...record,
+          processing_timestamp: processingTimestamp
+        }));
 
-      broadcast({ type: 'FILE_PROCESSED', fileMetadata });
+        await PreProcessRecord.bulkCreate(preProcessRecords);
+        await PostProcessRecord.bulkCreate(postProcessRecords);
+        
+        const endTime = Date.now();
+        const timeTaken = (endTime - startTime) / 1000; // in seconds
+        
+        await fileMetadata.updateStatus('completed');
 
-    } catch (error) {
-      console.error(`🔥 Error processing file ${file.name}:`, error);
-      await fileMetadata.updateStatus('failed');
-      broadcast({ type: 'FILE_PROCESSED', fileMetadata });
-    }
-  }
+        processingTimes.push(timeTaken);
+        processedCount++;
+        
+        const avgTime = processingTimes.reduce((a, b) => a + b, 0) / processedCount;
+        const estimatedTimeLeft = (totalFiles - processedCount) * avgTime;
+
+        broadcast({ 
+          type: 'FILE_PROCESSED', 
+          fileMetadata, 
+          timeTaken,
+          progress: {
+            processed: processedCount,
+            total: totalFiles,
+            estimatedTimeLeft
+          }
+        });
+
+      } catch (error) {
+        console.error(`🔥 Error processing file ${file.name}:`, error);
+        await fileMetadata.updateStatus('failed');
+        processedCount++;
+        broadcast({ 
+          type: 'FILE_PROCESSED', 
+          fileMetadata,
+          progress: {
+            processed: processedCount,
+            total: totalFiles,
+            estimatedTimeLeft: 0
+          }
+        });
+      }
+    });
+  });
+
+  await Promise.all(processingPromises);
+  broadcast({ type: 'ALL_FILES_PROCESSED', collectionId });
 };
 
 export const updateUploadProgress = async (req, res) => {
