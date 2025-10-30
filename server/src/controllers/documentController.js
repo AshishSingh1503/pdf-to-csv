@@ -228,7 +228,7 @@ export const downloadFile = (req, res) => {
 const downloadCollectionFile = async (req, res, fileType) => {
   try {
     const { collectionId } = req.params;
-    const { type } = req.query;
+    const { type, append } = req.query; // Check for append flag
     const collection = await Collection.findById(collectionId);
     if (!collection) {
       return res.status(404).json({ error: "Collection not found" });
@@ -257,9 +257,11 @@ const downloadCollectionFile = async (req, res, fileType) => {
       xlsx.utils.book_append_sheet(workbook, worksheet, "Data");
       xlsx.writeFile(workbook, filePath);
     } else {
+      const appendCsv = append === 'true' && fs.existsSync(filePath);
       const csvWriter = createObjectCsvWriter({
         path: filePath,
-        header: Object.keys(records[0] || {}).map(key => ({id: key, title: key}))
+        header: Object.keys(records[0] || {}).map(key => ({id: key, title: key})),
+        append: appendCsv
       });
       await csvWriter.writeRecords(records);
     }
@@ -269,7 +271,9 @@ const downloadCollectionFile = async (req, res, fileType) => {
         console.error("🔥 Error downloading file:", err);
         res.status(500).json({ error: "Could not download the file." });
       }
-      fs.unlinkSync(filePath);
+      if (!append) {
+        fs.unlinkSync(filePath);
+      }
     });
   } catch (err) {
     console.error(`🔥 Error in downloadCollectionFile (${fileType}):`, err);
