@@ -162,6 +162,11 @@ export const reprocessFile = async (req, res) => {
       return res.status(404).json({ error: 'File not found' });
     }
 
+    // Ensure there is a file to reprocess
+    if (!fileMetadata.cloud_storage_path) {
+      return res.status(404).json({ error: 'File not found in cloud storage, cannot reprocess' });
+    }
+
     const tempPath = await CloudStorageService.downloadFile(fileMetadata.cloud_storage_path);
     const file = {
       name: fileMetadata.original_filename,
