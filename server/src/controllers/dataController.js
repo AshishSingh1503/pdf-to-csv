@@ -24,10 +24,10 @@ export const getPreProcessData = async (req, res) => {
     const formattedRecords = records.map(record => ({
       id: record.id,
       full_name: record.full_name,
+      dob: record.dateofbirth,
+      address: record.address,
       mobile: record.mobile,
       email: record.email,
-      address: record.address,
-      dob: record.dateofbirth,
       seen: record.lastseen,
       source: record.file_name,
       created_at: record.created_at
@@ -71,10 +71,10 @@ export const getPostProcessData = async (req, res) => {
       id: record.id,
       first: record.first_name,
       last: record.last_name,
+      dob: record.dateofbirth,
+      address: record.address,
       mobile: record.mobile,
       email: record.email,
-      address: record.address,
-      dob: record.dateofbirth,
       seen: record.lastseen,
       source: record.file_name,
       created_at: record.created_at
@@ -114,10 +114,10 @@ export const searchData = async (req, res) => {
       results.preProcess = preRecords.map(record => ({
         id: record.id,
         full_name: record.full_name,
+        dob: record.dateofbirth,
+        address: record.address,
         mobile: record.mobile,
         email: record.email,
-        address: record.address,
-        dob: record.dateofbirth,
         seen: record.lastseen,
         source: record.file_name,
         created_at: record.created_at
@@ -131,10 +131,10 @@ export const searchData = async (req, res) => {
         id: record.id,
         first: record.first_name,
         last: record.last_name,
+        dob: record.dateofbirth,
+        address: record.address,
         mobile: record.mobile,
         email: record.email,
-        address: record.address,
-        dob: record.dateofbirth,
         seen: record.lastseen,
         source: record.file_name,
         created_at: record.created_at

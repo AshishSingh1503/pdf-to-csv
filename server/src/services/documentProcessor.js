@@ -152,10 +152,10 @@ const cleanAndValidate = (records) => {
     cleanRecords.push({
       first_name: firstName,
       last_name: lastName,
-      mobile: mobileDigits,
-      address: fixedAddress,
-      email: email || '',
       dateofbirth: dateofbirth || '',
+      address: fixedAddress,
+      mobile: mobileDigits,
+      email: email || '',
       landline: landline || '',
       lastseen: lastseen || '',
     });
@@ -209,10 +209,10 @@ export const processPDFs = async (pdfFiles) => {
 
       const preProcessingRecords = rawRecords.map(record => ({
         full_name: `${record.first_name || ''} ${record.last_name || ''}`.trim(),
-        mobile: record.mobile,
-        address: record.address,
-        email: record.email,
         dateofbirth: record.dateofbirth,
+        address: record.address,
+        mobile: record.mobile,
+        email: record.email,
         landline: record.landline,
         lastseen: record.lastseen,
         file_name: record.file_name
@@ -245,10 +245,10 @@ export const processPDFs = async (pdfFiles) => {
         },
         field_counts: {
             names: rawRecords.filter(r => r.first_name).length,
-            mobiles: rawRecords.filter(r => r.mobile).length,
-            addresses: rawRecords.filter(r => r.address).length,
-            emails: rawRecords.filter(r => r.email).length,
             dateofbirths: rawRecords.filter(r => r.dateofbirth).length,
+            addresses: rawRecords.filter(r => r.address).length,
+            mobiles: rawRecords.filter(r => r.mobile).length,
+            emails: rawRecords.filter(r => r.email).length,
             landlines: rawRecords.filter(r => r.landline).length,
             lastseens: rawRecords.filter(r => r.lastseen).length
         },
