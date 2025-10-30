@@ -7,6 +7,7 @@ import ProgressBar from './ProgressBar';
 const UploadedFilesSidebar = ({ isOpen, onClose, selectedCollection }) => {
   const [files, setFiles] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [processingInfo, setProcessingInfo] = useState({ processed: 0, total: 0, estimatedTimeLeft: 0 });
 
   useEffect(() => {
     if (isOpen && selectedCollection) {
@@ -17,9 +18,24 @@ const UploadedFilesSidebar = ({ isOpen, onClose, selectedCollection }) => {
   useEffect(() => {
     socket.onmessage = (event) => {
       const message = JSON.parse(event.data);
-      if (message.type === 'FILES_PROCESSED' && message.collectionId === selectedCollection?.id) {
-        fetchFiles();
+
+      if (message.type === 'FILE_PROCESSED') {
+        setFiles(prevFiles => {
+          return prevFiles.map(file => {
+            if (file.id === message.fileMetadata.id) {
+              return { ...file, ...message.fileMetadata, timeTaken: message.timeTaken };
+            }
+            return file;
+          });
+        });
+        setProcessingInfo(message.progress);
       }
+
+      if (message.type === 'ALL_FILES_PROCESSED' && message.collectionId === selectedCollection?.id) {
+        fetchFiles();
+        setProcessingInfo({ processed: 0, total: 0, estimatedTimeLeft: 0 });
+      }
+      
       if (message.type === 'FILE_REPROCESSED' && message.collectionId === selectedCollection?.id) {
         fetchFiles();
       }
@@ -101,9 +117,18 @@ const UploadedFilesSidebar = ({ isOpen, onClose, selectedCollection }) => {
               </svg>
             </button>
           </div>
-  
           {/* Content */}
           <div className="flex-1 overflow-y-auto p-4">
+            {processingInfo.total > 0 && (
+              <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                <p className="text-sm font-medium text-blue-900">
+                  Processing: {processingInfo.processed} of {processingInfo.total} files
+                </p>
+                <p className="text-xs text-blue-700">
+                  Estimated time left: {Math.round(processingInfo.estimatedTimeLeft)}s
+                </p>
+              </div>
+            )}
             {loading ? (
               <div className="flex items-center justify-center h-32">
                 <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900"></div>
@@ -124,54 +149,41 @@ const UploadedFilesSidebar = ({ isOpen, onClose, selectedCollection }) => {
                         <div className="flex flex-wrap gap-x-4 text-xs text-gray-500">
                           <span>{new Date(file.created_at).toLocaleString()}</span>
                           <span>{(file.file_size / 1024).toFixed(2)} KB</span>
+                          {file.timeTaken && <span>Time: {file.timeTaken.toFixed(2)}s</span>}
                         </div>
                       </div>
   
                       <div className="flex items-center gap-2 self-end sm:self-center">
-                        {/* <button 
-                          onClick={() => handleDownload(file)}
-                          className="p-2 hover:bg-gray-200 rounded-full transition-colors"
-                          title="Download"
-                        >
-                          <svg className="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                          </svg>
-                        </button> */}
-  
                         {file.processing_status === 'failed' && (
                           <button 
                             onClick={() => handleReprocess(file.id)}
                             className="p-2 hover:bg-gray-200 rounded-full transition-colors"
                             title="Reprocess"
                           >
-                            <svg className="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            {/* <svg className="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                            </svg>
+                            </svg> */}
                           </button>
                         )}
   
-                        <span
-                          className={`px-2 py-1 text-xs font-medium rounded-full ${
-                            file.processing_status === 'completed'
-                              ? 'text-green-700 bg-green-100'
-                              : file.processing_status === 'processing'
-                              ? 'text-yellow-700 bg-yellow-100'
-                              : 'text-red-700 bg-red-100'
-                          }`}
-                        >
-                          {file.processing_status}
-                        </span>
+                        {file.processing_status === 'processing' ? (
+                          <div className="flex items-center gap-2">
+                            <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-yellow-700"></div>
+                            <span className="text-xs font-medium text-yellow-700">Processing...</span>
+                          </div>
+                        ) : (
+                          <span
+                            className={`px-2 py-1 text-xs font-medium rounded-full ${
+                              file.processing_status === 'completed'
+                                ? 'text-green-700 bg-green-100'
+                                : 'text-red-700 bg-red-100'
+                            }`}
+                          >
+                            {file.processing_status}
+                          </span>
+                        )}
                       </div>
                     </div>
-  
-                    {file.processing_status === 'processing' && (
-                      <div className="mt-3">
-                        <ProgressBar 
-                          progress={file.upload_progress} 
-                          className="h-2 rounded-full"
-                        />
-                      </div>
-                    )}
                   </div>
                 ))}
               </div>

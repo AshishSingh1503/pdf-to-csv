@@ -128,6 +128,15 @@ const Home = () => {
     fetchData();
   }, [selectedCollection, searchTerm, currentPage, isPostProcess]);
 
+  useEffect(() => {
+    socket.onmessage = (event) => {
+      const message = JSON.parse(event.data);
+      if (message.type === 'ALL_FILES_PROCESSED' && message.collectionId === selectedCollection?.id) {
+        fetchData();
+      }
+    };
+  }, [selectedCollection]);
+
   const handleSearch = (term) => {
     setSearchTerm(term);
     setCurrentPage(1);
