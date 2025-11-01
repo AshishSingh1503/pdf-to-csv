@@ -34,16 +34,16 @@ gcloud builds submit --tag gcr.io/$PROJECT_ID/pdf2csv-frontend:latest .
 # 5. Deploy backend to Cloud Run
 echo "🚀 Deploying backend to Cloud Run..."
 cd ../server
-gcloud run deploy pdf2csv-backend \
-  --image gcr.io/$PROJECT_ID/pdf2csv-backend:latest \
-  --platform managed \
-  --region $REGION \
-  --allow-unauthenticated \
-  --service-account $SERVICE_ACCOUNT \
-  --set-env-vars="NODE_ENV=production,PROJECT_ID=$PROJECT_ID,LOCATION=us,PROCESSOR_ID=9f82bf3d2a02e2ab,INPUT_BUCKET=pdf-data-extraction-input-bucket,OUTPUT_BUCKET=pdf-data-extraction-output-bucket,STORAGE_LOCATION=us,DB_HOST=/cloudsql/pdf2csv-475708:us-central1:pdf2csv-instance,DB_PORT=5432,DB_NAME=pdf2csv_db,DB_USER=805037964827-compute@developer,DB_SSL=true" \
-  --set-cloudsql-instances="pdf2csv-475708:us-central1:pdf2csv-instance" \
-  --memory=4Gi \
-  --cpu=2 \
+gcloud run deploy pdf2csv-backend \  
+  --image gcr.io/$PROJECT_ID/pdf2csv-backend:latest \  
+  --platform managed \  
+  --region $REGION \  
+  --allow-unauthenticated \  
+  --service-account $SERVICE_ACCOUNT \  
+  --set-env-vars="NODE_ENV=production,PROJECT_ID=$PROJECT_ID,LOCATION=us,PROCESSOR_ID=9f82bf3d2a02e2ab,INPUT_BUCKET=pdf-data-extraction-input-bucket,OUTPUT_BUCKET=pdf-data-extraction-output-bucket,STORAGE_LOCATION=us,DB_HOST=/cloudsql/pdf2csv-475708:us-central1:pdf2csv-instance,DB_PORT=5432,DB_NAME=pdf2csv_db,DB_USER=pdf2csv_user,DB_PASSWORD=UYRvznrfBR6fk)9},DB_SSL=true" \  
+  --set-cloudsql-instances="pdf2csv-475708:us-central1:pdf2csv-instance" \  
+  --memory=4Gi \  
+  --cpu=2 \  
   --timeout=300
 
 # 6. Get backend URL

@@ -5,14 +5,19 @@ import fs from "fs";
 import path from "path";
 
 // Initialize Document AI client
-let client;
-try {
-  const clientConfig = process.env.NODE_ENV === 'production' ? {} : { keyFilename: config.credentials };
-  client = new DocumentProcessorServiceClient(clientConfig);
-  console.log('✅ Document AI client initialized successfully');
-} catch (error) {
-  console.error("🔥 Failed to initialize Document AI client:", error);
-  throw new Error("Failed to initialize Document AI client. Please check your Google Cloud credentials.");
+let client;  
+try {  
+  // In production, use Application Default Credentials (ADC)  
+  // In development, use the credentials file from config  
+  const clientConfig = process.env.NODE_ENV === 'production'   
+    ? {}   
+    : { keyFilename: config.credentials };  
+    
+  client = new DocumentProcessorServiceClient(clientConfig);  
+  console.log('✅ Document AI client initialized successfully');  
+} catch (error) {  
+  console.error("🔥 Failed to initialize Document AI client:", error);  
+  throw new Error("Failed to initialize Document AI client. Please check your Google Cloud credentials.");  
 }
 
 // --- Helper Functions ported from Python ---

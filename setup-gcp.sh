@@ -56,6 +56,18 @@ gcloud iam service-accounts create pdf2csv-service \
 
 # 7. Grant necessary permissions
 echo "🔑 Granting permissions..."
+gcloud projects add-iam-policy-binding pdf2csv-475708 \  
+  --member="serviceAccount:805037964827-compute@developer.gserviceaccount.com" \  
+  --role="roles/documentai.apiUser"  
+  
+gcloud projects add-iam-policy-binding pdf2csv-475708 \  
+  --member="serviceAccount:805037964827-compute@developer.gserviceaccount.com" \  
+  --role="roles/storage.admin"  
+  
+gcloud projects add-iam-policy-binding pdf2csv-475708 \  
+  --member="serviceAccount:805037964827-compute@developer.gserviceaccount.com" \  
+  --role="roles/cloudsql.client"
+  
 gcloud projects add-iam-policy-binding $PROJECT_ID \
   --member="serviceAccount:$SERVICE_ACCOUNT" \
   --role="roles/cloudsql.client"
