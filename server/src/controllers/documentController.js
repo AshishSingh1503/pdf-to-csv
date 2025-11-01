@@ -67,6 +67,9 @@ const processPDFFiles = async (fileArray, collectionId, fileMetadatas) => {
       try {
         // First, upload the file to cloud storage
         const uploadedFile = await CloudStorageService.uploadProcessedFiles([file], collectionId);
+        if (!uploadedFile || uploadedFile.length === 0) {
+          throw new Error(`Failed to upload file ${file.name} to cloud storage.`);
+        }
         await fileMetadata.updateCloudStoragePath(uploadedFile[0].url);
 
         const sessionDir = path.join(process.cwd(), "output", `session_${Date.now()}`);

@@ -23,9 +23,12 @@ try {
 // --- Helper Functions ported from Python ---
 
 const extractEntitiesSimple = (document) => {
+  if (!document || !document.entities) {
+    return [];
+  }
   return document.entities.map(entity => ({
-    type: entity.type.toLowerCase().trim(),
-    value: entity.mentionText.trim(),
+    type: entity.type?.toLowerCase().trim() || '',
+    value: entity.mentionText?.trim() || '',
   }));
 };
 
@@ -62,29 +65,64 @@ const simpleGrouping = (entities) => {
   return records;
 };
 
+const singleLineAddress = (address) => {
+  if (!address) return '';
+  let s = address.replace(/\r|\n/g, ' ');
+  s = s.replace(/[,;\|/]+/g, ' ');
+  s = s.replace(/\s+/g, ' ').trim();
+  s = s.replace(/\.$/, '');
+  return s;
+}
+
 const fixAddressOrdering = (address) => {
     if (!address) return address;
-    address = address.trim();
 
-    const postcodeStatePattern = /^([A-Z]{2,3}\s+\d{4})\s+(.+)$/;
-    let match = address.match(postcodeStatePattern);
-    if (match) {
-        return `${match[2]} ${match[1]}`;
+    address = singleLineAddress(address);
+    let s = address.trim();
+
+    // Pattern A: State + Postcode at the beginning -> move to end
+    let m = s.match(/^\s*([A-Za-z]{2,3})\s+(\d{4})\s+(.+)$/i);
+    if (m) {
+        const state = m[1].toUpperCase();
+        const postcode = m[2];
+        const rest = m[3].trim();
+        const out = `${rest} ${state} ${postcode}`;
+        return out.replace(/\s+/g, ' ').trim();
     }
 
-    const postcodeOnlyPattern = /^(\d{4})\s+(.+?)\s+([A-Z]{2,3})$/;
-    match = address.match(postcodeOnlyPattern);
-    if (match) {
-        return `${match[2]} ${match[3]} ${match[1]}`;
+    // Pattern B: Postcode at beginning and state at end (e.g. '2289 ... NSW')
+    m = s.match(/^\s*(\d{4})\s+(.+?)\s+([A-Za-z]{2,3})\s*$/i);
+    if (m) {
+        const postcode = m[1];
+        const rest = m[2].trim();
+        const state = m[3].toUpperCase();
+        const out = `${rest} ${state} ${postcode}`;
+        return out.replace(/\s+/g, ' ').trim();
     }
 
-    const statePostcodeMiddlePattern = /^(.+?)\s+([A-Z]{2,3}\s+\d{4})\s+(.+)$/;
-    match = address.match(statePostcodeMiddlePattern);
-    if (match) {
-        return `${match[1]} ${match[3]} ${match[2]}`;
+    // Pattern C: State + Postcode in the middle (e.g. '114 Northcott Drive NSW 2289 ADAMSTOWN HEIGHTS')
+    m = s.match(/^(.+?)\s+([A-Za-z]{2,3})\s+(\d{4})\s+(.+)$/i);
+    if (m) {
+        const part1 = m[1].trim();
+        const state = m[2].toUpperCase();
+        const postcode = m[3];
+        const part2 = m[4].trim();
+        const out = `${part1} ${part2} ${state} ${postcode}`;
+        return out.replace(/\s+/g, ' ').trim();
     }
 
-    return address;
+    // Pattern D: If any state+postcode pair exists anywhere, pull it out and put at the end
+    m = s.match(/([A-Za-z]{2,3})\s+(\d{4})/i);
+    if (m) {
+        const state = m[1].toUpperCase();
+        const postcode = m[2];
+        const rest = (s.substring(0, m.index) + s.substring(m.index + m[0].length)).trim();
+        const cleanedRest = rest.replace(/\s+/g, ' ');
+        const out = `${cleanedRest} ${state} ${postcode}`.trim();
+        return out.replace(/\s+/g, ' ');
+    }
+
+    return s;
 };
 
 const cleanName = (name) => {
@@ -94,7 +132,7 @@ const cleanName = (name) => {
   s = s.replace(/[\d?]+/g, '');
   s = s.replace(/[^A-Za-zÀ-ÖØ-öø-ÿ'\-\s]/g, '');
   s = s.replace(/\s+/g, ' ').trim();
-  const parts = s ? s.split(' ').map(p => p.charAt(0).toUpperCase() + p.slice(1)) : [];
+  const parts = s ? s.split(' ').map(p => p.charAt(0).toUpperCase() + p.slice(1).toLowerCase()) : [];
   return parts.join(' ').trim();
 };
 
@@ -150,9 +188,10 @@ const cleanAndValidate = (records) => {
     const mobileDigits = mobile.replace(/\D/g, '');
     if (!(mobileDigits.length === 10 && mobileDigits.startsWith('04'))) continue;
     
-    if (!address || !/\d/.test(address.substring(0, 15))) continue;
-
     const fixedAddress = fixAddressOrdering(address);
+    
+    if (!fixedAddress || !/\d/.test(fixedAddress.substring(0, 25))) continue;
+
 
     cleanRecords.push({
       first_name: firstName,
