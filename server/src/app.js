@@ -8,7 +8,33 @@ import dataRoutes from "./routes/dataRoutes.js";
 import { initializeDatabase } from "./models/database.js";
 
 const app = express();
-app.use(cors());
+
+// ✅ Allow production frontend & localhost (for development)
+const allowedOrigins = [
+  "https://pdf2csv-frontend-805037964827.us-central1.run.app",
+  "http://localhost:3000",   
+  "http://localhost:3000",
+  "http://localhost:5000",
+  "http://localhost:5173",
+];
+
+app.use(
+  cors({
+    origin: function (origin, callback) {
+      if (!origin) return callback(null, true); // Allow requests with no origin (mobile apps, curl, etc.)
+      if (allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        console.log(`❌ Blocked by CORS: ${origin}`);
+        callback(new Error("Not allowed by CORS"));
+      }
+    },
+    credentials: true, // Allow cookies or auth headers
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+  })
+);
+
 app.use(express.json());
 app.use(fileUpload());
 
