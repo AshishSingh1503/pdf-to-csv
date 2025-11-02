@@ -190,7 +190,7 @@ const cleanAndValidate = (records) => {
     
     const fixedAddress = fixAddressOrdering(address);
     
-    if (!fixedAddress || !/\d/.test(fixedAddress.substring(0, 25))) continue;
+    if (!fixedAddress || !/\d/.test(fixedAddress.substring(0, 15))) continue;
 
 
     cleanRecords.push({
