@@ -28,7 +28,7 @@ const pool = new Pool({
   database: process.env.DB_NAME || 'pdf2csv_db',
   user: process.env.DB_USER || 'postgres',
   password: process.env.DB_PASSWORD || 'postgres',
-  ssl: false, // Disable SSL when using Cloud SQL Unix socket
+  ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : false,
   max: 20, // Maximum number of clients in the pool
   idleTimeoutMillis: 30000, // Close idle clients after 30 seconds
   connectionTimeoutMillis: 5000, // Increased timeout for Cloud SQL connection
@@ -210,6 +210,9 @@ export const initializeDatabase = async () => {
 
     console.log('✅ Database tables initialized successfully');
     
+    // Check and grant permissions to pdf2csv_user
+    await checkAndGrantPermissions();
+    
     // Grant permissions to pdf2csv_user if we're using postgres
     if (process.env.DB_USER === 'postgres') {
       console.log('🔐 Granting permissions to pdf2csv_user...');
@@ -255,6 +258,49 @@ export const initializeDatabase = async () => {
     // Don't throw to prevent app crash
     console.log('⚠️ Continuing without database...');
     return false;
+  }
+};
+
+// Check and grant permissions to pdf2csv_user
+const checkAndGrantPermissions = async () => {
+  try {
+    console.log('🔍 Checking permissions for pdf2csv_user...');
+    
+    // Test if pdf2csv_user can access customers table
+    try {
+      await query('SELECT 1 FROM customers LIMIT 1');
+      console.log('✅ pdf2csv_user has table access');
+      return;
+    } catch (permError) {
+      if (permError.code === '42501') {
+        console.log('⚠️ pdf2csv_user lacks permissions, attempting to grant...');
+        
+        // Try to grant permissions (requires current user to be superuser)
+        try {
+          await query('GRANT ALL PRIVILEGES ON DATABASE pdf2csv_db TO pdf2csv_user');
+          await query('GRANT ALL PRIVILEGES ON SCHEMA public TO pdf2csv_user');
+          await query('GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO pdf2csv_user');
+          await query('GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO pdf2csv_user');
+          await query('ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO pdf2csv_user');
+          await query('ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO pdf2csv_user');
+          
+          // Transfer ownership
+          const tables = ['customers', 'collections', 'pre_process_records', 'post_process_records', 'file_metadata'];
+          for (const table of tables) {
+            await query(`ALTER TABLE ${table} OWNER TO pdf2csv_user`);
+          }
+          
+          console.log('✅ Permissions granted to pdf2csv_user successfully');
+        } catch (grantError) {
+          console.log('❌ Failed to grant permissions:', grantError.message);
+          console.log('📝 Manual permission granting required by database administrator');
+        }
+      } else {
+        throw permError;
+      }
+    }
+  } catch (error) {
+    console.error('❌ Permission check failed:', error.message);
   }
 };
 
