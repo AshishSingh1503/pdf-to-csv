@@ -12,15 +12,6 @@ console.log('🔧 Environment Variables:', {
   NODE_ENV: process.env.NODE_ENV
 });
 
-// Log database configuration (excluding sensitive data)
-console.log('Database Configuration:', {
-  host: process.env.DB_HOST,
-  port: process.env.DB_PORT,
-  database: process.env.DB_NAME,
-  user: process.env.DB_USER,
-  ssl: process.env.DB_SSL
-});
-
 // Database connection pool
 const pool = new Pool({
   host: process.env.DB_HOST || 'localhost',
@@ -28,10 +19,12 @@ const pool = new Pool({
   database: process.env.DB_NAME || 'pdf2csv_db',
   user: process.env.DB_USER || 'postgres',
   password: process.env.DB_PASSWORD || 'postgres',
-  ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : false,
+  ssl: process.env.DB_SSL === 'true' ? {
+    rejectUnauthorized: false
+  } : false,
   max: 20, // Maximum number of clients in the pool
   idleTimeoutMillis: 30000, // Close idle clients after 30 seconds
-  connectionTimeoutMillis: 5000, // Increased timeout for Cloud SQL connection
+  connectionTimeoutMillis: 2000, // Return an error after 2 seconds if connection could not be established
 });
 
 // Test database connection
@@ -67,27 +60,10 @@ export const getClient = async () => {
 export const initializeDatabase = async () => {
   console.log('🚀 Starting database initialization...');
   try {
-    // Test connection first with retries
+    // Test connection first
     console.log('🔍 Testing database connection...');
-    let connected = false;
-    let retries = 3;
-    
-    while (!connected && retries > 0) {
-      try {
-        const testResult = await query('SELECT NOW() as current_time');
-        console.log('✅ Database connection successful:', testResult.rows[0]);
-        connected = true;
-      } catch (err) {
-        console.error(`Connection attempt failed. Retries left: ${retries}`, err);
-        retries--;
-        if (retries > 0) await new Promise(resolve => setTimeout(resolve, 2000));
-      }
-    }
-    
-    if (!connected) {
-      throw new Error('Failed to connect to database after multiple attempts');
-    }
-    
+    const testResult = await query('SELECT NOW() as current_time');
+    console.log('✅ Database connection successful:', testResult.rows[0]);
     // Create customers table
     await query(`
       CREATE TABLE IF NOT EXISTS customers (
@@ -97,10 +73,7 @@ export const initializeDatabase = async () => {
         phone VARCHAR(20),
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      );
-      
-      GRANT ALL PRIVILEGES ON TABLE customers TO pdf2csv_user;
-      GRANT USAGE, SELECT ON SEQUENCE customers_id_seq TO pdf2csv_user;
+      )
     `);
 
     // Create collections table
@@ -113,10 +86,7 @@ export const initializeDatabase = async () => {
         status VARCHAR(20) DEFAULT 'active',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      );
-      
-      GRANT ALL PRIVILEGES ON TABLE collections TO pdf2csv_user;
-      GRANT USAGE, SELECT ON SEQUENCE collections_id_seq TO pdf2csv_user;
+      )
     `);
     
     // Add customer_id column to collections table if it doesn't exist
@@ -140,10 +110,7 @@ export const initializeDatabase = async () => {
         file_name VARCHAR(255),
         processing_timestamp TIMESTAMP,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      );
-      
-      GRANT ALL PRIVILEGES ON TABLE pre_process_records TO pdf2csv_user;
-      GRANT USAGE, SELECT ON SEQUENCE pre_process_records_id_seq TO pdf2csv_user;
+      )
     `);
 
     // Create post_process_records table
@@ -162,10 +129,7 @@ export const initializeDatabase = async () => {
         file_name VARCHAR(255),
         processing_timestamp TIMESTAMP,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      );
-      
-      GRANT ALL PRIVILEGES ON TABLE post_process_records TO pdf2csv_user;
-      GRANT USAGE, SELECT ON SEQUENCE post_process_records_id_seq TO pdf2csv_user;
+      )
     `);
 
     // Create file_metadata table
@@ -179,10 +143,7 @@ export const initializeDatabase = async () => {
         processing_status VARCHAR(20) DEFAULT 'processing',
         upload_progress INTEGER DEFAULT 0,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      );
-      
-      GRANT ALL PRIVILEGES ON TABLE file_metadata TO pdf2csv_user;
-      GRANT USAGE, SELECT ON SEQUENCE file_metadata_id_seq TO pdf2csv_user;
+      )
     `);
 
     // Add upload_progress column if it doesn't exist
@@ -209,98 +170,15 @@ export const initializeDatabase = async () => {
     `);
 
     console.log('✅ Database tables initialized successfully');
-    
-    // Check and grant permissions to pdf2csv_user
-    await checkAndGrantPermissions();
-    
-    // Grant permissions to pdf2csv_user if we're using postgres
-    if (process.env.DB_USER === 'postgres') {
-      console.log('🔐 Granting permissions to pdf2csv_user...');
-      try {
-        await query('GRANT ALL PRIVILEGES ON DATABASE pdf2csv_db TO pdf2csv_user');
-        await query('GRANT ALL PRIVILEGES ON SCHEMA public TO pdf2csv_user');
-        await query('GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO pdf2csv_user');
-        await query('GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO pdf2csv_user');
-        await query('ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO pdf2csv_user');
-        await query('ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO pdf2csv_user');
-        await query('ALTER TABLE customers OWNER TO pdf2csv_user');
-        await query('ALTER TABLE collections OWNER TO pdf2csv_user');
-        await query('ALTER TABLE pre_process_records OWNER TO pdf2csv_user');
-        await query('ALTER TABLE post_process_records OWNER TO pdf2csv_user');
-        await query('ALTER TABLE file_metadata OWNER TO pdf2csv_user');
-        console.log('✅ Permissions granted to pdf2csv_user successfully');
-      } catch (permError) {
-        console.log('⚠️ Permission granting failed:', permError.message);
-      }
-    }
-    
-    // Create test data if tables are empty
-    const customerCount = await query('SELECT COUNT(*) FROM customers');
-    if (parseInt(customerCount.rows[0].count) === 0) {
-      console.log('📝 Creating test data...');
-      
-      // Create test customer
-      const testCustomer = await query(
-        'INSERT INTO customers (name, email, phone) VALUES ($1, $2, $3) RETURNING *',
-        ['Test Customer', 'test@example.com', '1234567890']
-      );
-      console.log('✅ Test customer created:', testCustomer.rows[0]);
-      
-      // Create test collection
-      const testCollection = await query(
-        'INSERT INTO collections (name, description, customer_id) VALUES ($1, $2, $3) RETURNING *',
-        ['Test Collection', 'Test collection for debugging', testCustomer.rows[0].id]
-      );
-      console.log('✅ Test collection created:', testCollection.rows[0]);
-    }
   } catch (error) {
-    console.error('❌ Database initialization failed:', error);
+    console.error('❌ Database initialization failed:', {
+      message: error.message,
+      code: error.code,
+      detail: error.detail,
+      stack: error.stack
+    });
     // Don't throw to prevent app crash
     console.log('⚠️ Continuing without database...');
-    return false;
-  }
-};
-
-// Check and grant permissions to pdf2csv_user
-const checkAndGrantPermissions = async () => {
-  try {
-    console.log('🔍 Checking permissions for pdf2csv_user...');
-    
-    // Test if pdf2csv_user can access customers table
-    try {
-      await query('SELECT 1 FROM customers LIMIT 1');
-      console.log('✅ pdf2csv_user has table access');
-      return;
-    } catch (permError) {
-      if (permError.code === '42501') {
-        console.log('⚠️ pdf2csv_user lacks permissions, attempting to grant...');
-        
-        // Try to grant permissions (requires current user to be superuser)
-        try {
-          await query('GRANT ALL PRIVILEGES ON DATABASE pdf2csv_db TO pdf2csv_user');
-          await query('GRANT ALL PRIVILEGES ON SCHEMA public TO pdf2csv_user');
-          await query('GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO pdf2csv_user');
-          await query('GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO pdf2csv_user');
-          await query('ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO pdf2csv_user');
-          await query('ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO pdf2csv_user');
-          
-          // Transfer ownership
-          const tables = ['customers', 'collections', 'pre_process_records', 'post_process_records', 'file_metadata'];
-          for (const table of tables) {
-            await query(`ALTER TABLE ${table} OWNER TO pdf2csv_user`);
-          }
-          
-          console.log('✅ Permissions granted to pdf2csv_user successfully');
-        } catch (grantError) {
-          console.log('❌ Failed to grant permissions:', grantError.message);
-          console.log('📝 Manual permission granting required by database administrator');
-        }
-      } else {
-        throw permError;
-      }
-    }
-  } catch (error) {
-    console.error('❌ Permission check failed:', error.message);
   }
 };
 
