@@ -18,7 +18,13 @@ const UploadedFilesSidebar = ({ isOpen, onClose, selectedCollection }) => {
     socket.onmessage = (event) => {
       const message = JSON.parse(event.data);
       if (message.type === 'FILES_PROCESSED' && message.collectionId === selectedCollection?.id) {
-        fetchFiles();
+        setFiles(prevFiles => 
+          prevFiles.map(file => 
+            file.id === message.fileMetadata.id 
+              ? { ...file, processing_status: message.fileMetadata.processing_status }
+              : file
+          )
+        );
       }
       if (message.type === 'FILE_REPROCESSED' && message.collectionId === selectedCollection?.id) {
         fetchFiles();

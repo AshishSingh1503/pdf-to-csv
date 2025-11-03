@@ -3,6 +3,7 @@ import { DocumentProcessorServiceClient } from "@google-cloud/documentai";
 import { config } from "../config/index.js";
 import fs from "fs";
 import path from "path";
+import pLimit from "p-limit";
 
 // Initialize Document AI client
 let client;
@@ -12,17 +13,16 @@ try {
   console.log('✅ Document AI client initialized successfully');
 } catch (error) {
   console.error("🔥 Failed to initialize Document AI client:", error);
-  // We don't throw an error here to prevent the server from crashing on startup.
-  // The error will be caught and handled in the processPDFs function.
+  throw new Error("Failed to initialize Document AI client. Please check your Google Cloud credentials.");
 }
 
 // --- Helper Functions ported from Python ---
 
 const extractEntitiesSimple = (document) => {
-  return document.entities.map(entity => ({
-    type: entity.type.toLowerCase().trim(),
-    value: entity.mentionText.trim(),
-  }));
+  return document.entities?.map(entity => ({
+    type: entity.type?.toLowerCase().trim(),
+    value: entity.mentionText?.trim(),
+  })) || [];
 };
 
 const simpleGrouping = (entities) => {
@@ -50,7 +50,7 @@ const simpleGrouping = (entities) => {
     if (i < dobs.length) record.dateofbirth = dobs[i];
     if (i < landlines.length) record.landline = landlines[i];
     if (i < lastseens.length) record.lastseen = lastseens[i];
-    
+
     if (record.first_name) {
       records.push(record);
     }
@@ -58,29 +58,56 @@ const simpleGrouping = (entities) => {
   return records;
 };
 
+const _single_line_address = (address) => {
+  if (!address) return '';
+  let s = address.replace(/\r/g, ' ').replace(/\n/g, ' ');
+  s = s.replace(/[,;\|/]+/g, ' ');
+  s = s.replace(/\s+/g, ' ').trim();
+  s = s.endsWith('.') ? s.slice(0, -1) : s;
+  return s;
+}
+
 const fixAddressOrdering = (address) => {
-    if (!address) return address;
-    address = address.trim();
+  if (!address) return address;
 
-    const postcodeStatePattern = /^([A-Z]{2,3}\s+\d{4})\s+(.+)$/;
-    let match = address.match(postcodeStatePattern);
-    if (match) {
-        return `${match[2]} ${match[1]}`;
-    }
+  let s = _single_line_address(address).trim();
+  let match;
 
-    const postcodeOnlyPattern = /^(\d{4})\s+(.+?)\s+([A-Z]{2,3})$/;
-    match = address.match(postcodeOnlyPattern);
-    if (match) {
-        return `${match[2]} ${match[3]} ${match[1]}`;
-    }
+  // Pattern A: State + Postcode at the beginning
+  match = s.match(/^\s*([A-Za-z]{2,3})\s+(\d{4})\s+(.+)$/i);
+  if (match) {
+    const [, state, postcode, rest] = match;
+    const out = `${rest.trim()} ${state.toUpperCase()} ${postcode}`;
+    return out.replace(/\s+/g, ' ').trim();
+  }
 
-    const statePostcodeMiddlePattern = /^(.+?)\s+([A-Z]{2,3}\s+\d{4})\s+(.+)$/;
-    match = address.match(statePostcodeMiddlePattern);
-    if (match) {
-        return `${match[1]} ${match[3]} ${match[2]}`;
-    }
+  // Pattern B: Postcode at beginning and state at end
+  match = s.match(/^\s*(\d{4})\s+(.+?)\s+([A-Za-z]{2,3})\s*$/i);
+  if (match) {
+    const [, postcode, rest, state] = match;
+    const out = `${rest.trim()} ${state.toUpperCase()} ${postcode}`;
+    return out.replace(/\s+/g, ' ').trim();
+  }
 
-    return address;
+  // Pattern C: State + Postcode in the middle
+  match = s.match(/^(.+?)\s+([A-Za-z]{2,3})\s+(\d{4})\s+(.+)$/i);
+  if (match) {
+    const [, part1, state, postcode, part2] = match;
+    const out = `${part1.trim()} ${part2.trim()} ${state.toUpperCase()} ${postcode}`;
+    return out.replace(/\s+/g, ' ').trim();
+  }
+
+  // Pattern D: If any state+postcode pair exists anywhere, move it to the end
+  match = s.match(/([A-Za-z]{2,3})\s+(\d{4})/i);
+  if (match) {
+    const state = match[1].toUpperCase();
+    const postcode = match[2];
+    const rest = (s.substring(0, match.index) + s.substring(match.index + match[0].length)).trim();
+    const out = `${rest.replace(/\s+/g, ' ')} ${state} ${postcode}`;
+    return out.trim();
+  }
+
+  return s;
 };
 
 const cleanName = (name) => {
@@ -95,29 +122,29 @@ const cleanName = (name) => {
 };
 
 const normalizeDateField = (dateStr) => {
-    if (!dateStr) return '';
-    let s = dateStr.trim();
-    s = s.replace(/[-\u2013\u2014]+/g, '-');
-    s = s.replace(/-{2,}/g, '-');
-    s = s.replace(/^[\-\s]+|[\-\s]+$/g, '');
-    s = s.replace(/[^0-9A-Za-z\s\-\/]/g, '');
-    s = s.replace(/\./g, '-');
+  if (!dateStr) return '';
+  let s = dateStr.trim();
+  s = s.replace(/[-\u2013\u2014]+/g, '-');
+  s = s.replace(/-{2,}/g, '-');
+  s = s.replace(/^[\-\s]+|[\-\s]+$/g, '');
+  s = s.replace(/[^0-9A-Za-z\s\-\/]/g, '');
+  s = s.replace(/\./g, '-');
 
-    const match = s.match(/^(\d{1,2})([A-Za-z]{3,})(\d{4})$/);
-    if (match) {
-        s = `${match[1]}-${match[2]}-${match[3]}`;
-    }
+  const match = s.match(/^(\d{1,2})([A-Za-z]{3,})(\d{4})$/);
+  if (match) {
+    s = `${match[1]}-${match[2]}-${match[3]}`;
+  }
 
-    try {
-        const dt = new Date(s);
-        if (isNaN(dt.getTime())) return '';
-        const year = dt.getFullYear();
-        const month = String(dt.getMonth() + 1).padStart(2, '0');
-        const day = String(dt.getDate()).padStart(2, '0');
-        return `${year}-${month}-${day}`;
-    } catch (e) {
-        return '';
-    }
+  try {
+    const dt = new Date(s);
+    if (isNaN(dt.getTime())) return '';
+    const year = dt.getFullYear();
+    const month = String(dt.getMonth() + 1).padStart(2, '0');
+    const day = String(dt.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  } catch (e) {
+    return '';
+  }
 };
 
 const cleanAndValidate = (records) => {
@@ -133,9 +160,11 @@ const cleanAndValidate = (records) => {
     const lastName = cleanName(rawLast);
 
     const mobile = record.mobile?.trim() || '';
-    const address = record.address?.trim() || '';
+    let address = record.address?.trim() || '';
     const email = record.email?.trim() || '';
     const landline = record.landline?.trim() || '';
+
+    address = fixAddressOrdering(address);
 
     const dateofbirth = normalizeDateField(rawDob);
     const lastseen = normalizeDateField(rawLastseen);
@@ -145,18 +174,16 @@ const cleanAndValidate = (records) => {
 
     const mobileDigits = mobile.replace(/\D/g, '');
     if (!(mobileDigits.length === 10 && mobileDigits.startsWith('04'))) continue;
-    
-    if (!address || !/\d/.test(address.substring(0, 15))) continue;
 
-    const fixedAddress = fixAddressOrdering(address);
+    if (!address || !/\d/.test(address.substring(0, 25))) continue;
 
     cleanRecords.push({
       first_name: firstName,
       last_name: lastName,
-      mobile: mobileDigits,
-      address: fixedAddress,
-      email: email || '',
       dateofbirth: dateofbirth || '',
+      address: address,
+      mobile: mobileDigits,
+      email: email || '',
       landline: landline || '',
       lastseen: lastseen || '',
     });
@@ -176,101 +203,109 @@ const cleanAndValidate = (records) => {
 
 // --- Main Processing Function ---
 
-export const processPDFs = async (pdfFiles) => {
+export const processPDFs = async (pdfFiles, batchSize = 10, maxWorkers = 4) => {
+  const limit = pLimit(maxWorkers);
+
   try {
     const tempDir = path.join(process.cwd(), "temp");
     if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
 
-    let allRawRecords = [];
-    let allFilteredRecords = [];
-    let allPreProcessingJson = [];
-    let allPostProcessingJson = [];
-
-    for (const file of pdfFiles) {
+    const processFile = async (file) => {
       const tempPath = path.join(tempDir, file.name);
       await file.mv(tempPath);
 
-      const [result] = await client.processDocument({
-        name: `projects/${config.projectId}/locations/${config.location}/processors/${config.processorId}`,
-        rawDocument: {
-          content: fs.readFileSync(tempPath),
-          mimeType: "application/pdf",
-        },
-      });
+      try {
+        const [result] = await client.processDocument({
+          name: `projects/${config.projectId}/locations/${config.location}/processors/${config.processorId}`,
+          rawDocument: {
+            content: fs.readFileSync(tempPath),
+            mimeType: "application/pdf",
+          },
+        });
 
-      const entities = extractEntitiesSimple(result.document);
-      const rawRecords = simpleGrouping(entities);
-      const filteredRecords = cleanAndValidate(rawRecords);
-      
-      rawRecords.forEach(r => r.file_name = file.name);
-      filteredRecords.forEach(r => r.file_name = file.name);
+        const entities = extractEntitiesSimple(result.document);
+        const rawRecords = simpleGrouping(entities);
+        const filteredRecords = cleanAndValidate(rawRecords);
 
-      allRawRecords.push(...rawRecords);
-      allFilteredRecords.push(...filteredRecords);
+        rawRecords.forEach(r => r.file_name = file.name);
+        filteredRecords.forEach(r => r.file_name = file.name);
 
-      const preProcessingRecords = rawRecords.map(record => ({
-        full_name: `${record.first_name || ''} ${record.last_name || ''}`.trim(),
-        mobile: record.mobile,
-        address: record.address,
-        email: record.email,
-        dateofbirth: record.dateofbirth,
-        landline: record.landline,
-        lastseen: record.lastseen,
-        file_name: record.file_name
-      }));
+        const preProcessingRecords = rawRecords.map(record => ({
+          full_name: `${record.first_name || ''} ${record.last_name || ''}`.trim(),
+          dateofbirth: record.dateofbirth,
+          address: record.address,
+          mobile: record.mobile,
+          email: record.email,
+          landline: record.landline,
+          lastseen: record.lastseen,
+          file_name: record.file_name
+        }));
 
-      const preProcessingJson = {
-        file_name: file.name,
-        processing_timestamp: new Date().toISOString(),
-        raw_records: preProcessingRecords,
-        document_ai_entities: entities,
-        total_entities: entities.length,
-        entity_types: [...new Set(entities.map(e => e.type))],
-        raw_text: result.document.text,
-        metadata: {
-          processor_id: config.processorId,
-          project_id: config.projectId,
-          location: config.location
-        }
-      };
+        const preProcessingJson = {
+          file_name: file.name,
+          processing_timestamp: new Date().toISOString(),
+          raw_records: preProcessingRecords,
+          document_ai_entities: entities,
+          total_entities: entities.length,
+          entity_types: [...new Set(entities.map(e => e.type))],
+          raw_text: result.document.text,
+          metadata: {
+            processor_id: config.processorId,
+            project_id: config.projectId,
+            location: config.location
+          }
+        };
 
-      const postProcessingJson = {
-        file_name: file.name,
-        processing_timestamp: new Date().toISOString(),
-        raw_records: rawRecords,
-        filtered_records: filteredRecords,
-        summary: {
+        const postProcessingJson = {
+          file_name: file.name,
+          processing_timestamp: new Date().toISOString(),
+          raw_records: rawRecords,
+          filtered_records: filteredRecords,
+          summary: {
             total_raw_records: rawRecords.length,
             total_filtered_records: filteredRecords.length,
             success_rate: rawRecords.length > 0 ? `${((filteredRecords.length / rawRecords.length) * 100).toFixed(1)}%` : "0%"
-        },
-        field_counts: {
+          },
+          field_counts: {
             names: rawRecords.filter(r => r.first_name).length,
-            mobiles: rawRecords.filter(r => r.mobile).length,
-            addresses: rawRecords.filter(r => r.address).length,
-            emails: rawRecords.filter(r => r.email).length,
             dateofbirths: rawRecords.filter(r => r.dateofbirth).length,
+            addresses: rawRecords.filter(r => r.address).length,
+            mobiles: rawRecords.filter(r => r.mobile).length,
+            emails: rawRecords.filter(r => r.email).length,
             landlines: rawRecords.filter(r => r.landline).length,
             lastseens: rawRecords.filter(r => r.lastseen).length
-        },
-        metadata: {
-          processor_id: config.processorId,
-          project_id: config.projectId,
-          location: config.location
-        }
-      };
-      
-      allPreProcessingJson.push(preProcessingJson);
-      allPostProcessingJson.push(postProcessingJson);
-      
-      fs.unlinkSync(tempPath);
-    }
-    
-    return { 
-      allRawRecords, 
-      allFilteredRecords, 
-      allPreProcessingJson, 
-      allPostProcessingJson 
+          },
+          metadata: {
+            processor_id: config.processorId,
+            project_id: config.projectId,
+            location: config.location
+          }
+        };
+
+        return {
+          rawRecords,
+          filteredRecords,
+          preProcessingJson,
+          postProcessingJson,
+        };
+      } finally {
+        fs.unlinkSync(tempPath);
+      }
+    };
+
+    const processingPromises = pdfFiles.map(file => limit(() => processFile(file)));
+    const results = await Promise.all(processingPromises);
+
+    const allRawRecords = results.flatMap(r => r.rawRecords);
+    const allFilteredRecords = results.flatMap(r => r.filteredRecords);
+    const allPreProcessingJson = results.map(r => r.preProcessingJson);
+    const allPostProcessingJson = results.map(r => r.postProcessingJson);
+
+    return {
+      allRawRecords,
+      allFilteredRecords,
+      allPreProcessingJson,
+      allPostProcessingJson,
     };
 
   } catch (error) {
