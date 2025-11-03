@@ -6,10 +6,10 @@ export class PreProcessRecord {
     this.id = data.id;
     this.collection_id = data.collection_id;
     this.full_name = data.full_name;
+    this.dateofbirth = data.dateofbirth;
+    this.address = data.address;
     this.mobile = data.mobile;
     this.email = data.email;
-    this.address = data.address;
-    this.dateofbirth = data.dateofbirth;
     this.landline = data.landline;
     this.lastseen = data.lastseen;
     this.file_name = data.file_name;
@@ -22,10 +22,10 @@ export class PreProcessRecord {
     const {
       collection_id,
       full_name,
+      dateofbirth,
+      address,
       mobile,
       email,
-      address,
-      dateofbirth,
       landline,
       lastseen,
       file_name,
@@ -34,10 +34,10 @@ export class PreProcessRecord {
 
     const result = await query(
       `INSERT INTO pre_process_records 
-       (collection_id, full_name, mobile, email, address, dateofbirth, landline, lastseen, file_name, processing_timestamp)
+       (collection_id, full_name,dateofbirth,address ,mobile, email, landline, lastseen, file_name, processing_timestamp)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
        RETURNING *`,
-      [collection_id, full_name, mobile, email, address, dateofbirth, landline, lastseen, file_name, processing_timestamp]
+      [collection_id, full_name, dateofbirth, address, mobile, email, landline, lastseen, file_name, processing_timestamp]
     );
     return new PreProcessRecord(result.rows[0]);
   }
@@ -54,10 +54,10 @@ export class PreProcessRecord {
     const params = records.flatMap(record => [
       record.collection_id,
       record.full_name,
+      record.dateofbirth,
+      record.address,
       record.mobile,
       record.email,
-      record.address,
-      record.dateofbirth,
       record.landline,
       record.lastseen,
       record.file_name,
@@ -66,7 +66,7 @@ export class PreProcessRecord {
 
     const result = await query(
       `INSERT INTO pre_process_records 
-       (collection_id, full_name, mobile, email, address, dateofbirth, landline, lastseen, file_name, processing_timestamp)
+       (collection_id, full_name, dateofbirth, address, mobile, email, landline, lastseen, file_name, processing_timestamp)
        VALUES ${values}
        RETURNING *`,
       params
@@ -118,9 +118,9 @@ export class PreProcessRecord {
       SELECT * FROM pre_process_records 
       WHERE (
         LOWER(full_name) LIKE LOWER($1) OR
+        LOWER(address) LIKE LOWER($1) OR
         LOWER(mobile) LIKE LOWER($1) OR
         LOWER(email) LIKE LOWER($1) OR
-        LOWER(address) LIKE LOWER($1) OR
         LOWER(file_name) LIKE LOWER($1)
       )
     `;
@@ -159,9 +159,9 @@ export class PreProcessRecord {
     if (searchTerm) {
       queryText += ` ${paramCount > 0 ? 'AND' : 'WHERE'} (
         LOWER(full_name) LIKE LOWER($${paramCount + 1}) OR
+        LOWER(address) LIKE LOWER($${paramCount + 1}) OR
         LOWER(mobile) LIKE LOWER($${paramCount + 1}) OR
         LOWER(email) LIKE LOWER($${paramCount + 1}) OR
-        LOWER(address) LIKE LOWER($${paramCount + 1}) OR
         LOWER(file_name) LIKE LOWER($${paramCount + 1})
       )`;
       params.push(`%${searchTerm}%`);

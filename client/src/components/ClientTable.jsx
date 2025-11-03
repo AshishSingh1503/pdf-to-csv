@@ -69,6 +69,26 @@ const ClientTable = ({ data, isPostProcess, sortField, sortDirection, onSort }) 
                 </div>
               </th>
             )}
+
+            <th 
+                          className="py-2 px-4 border-b cursor-pointer hover:bg-gray-50 select-none"
+                          onClick={() => onSort('dob')}
+                        >
+                          <div className="flex items-center justify-between">
+                            DOB
+                            {getSortIcon('dob')}
+                          </div>
+                        </th>
+
+            <th 
+                          className="py-2 px-4 border-b cursor-pointer hover:bg-gray-50 select-none"
+                          onClick={() => onSort('address')}
+                        >
+                          <div className="flex items-center justify-between">
+                            ADDRESS
+                            {getSortIcon('address')}
+                          </div>
+                        </th>
             <th 
               className="py-2 px-4 border-b cursor-pointer hover:bg-gray-50 select-none"
               onClick={() => onSort('mobile')}
@@ -87,24 +107,8 @@ const ClientTable = ({ data, isPostProcess, sortField, sortDirection, onSort }) 
                 {getSortIcon('email')}
               </div>
             </th>
-            <th 
-              className="py-2 px-4 border-b cursor-pointer hover:bg-gray-50 select-none"
-              onClick={() => onSort('address')}
-            >
-              <div className="flex items-center justify-between">
-                ADDRESS
-                {getSortIcon('address')}
-              </div>
-            </th>
-            <th 
-              className="py-2 px-4 border-b cursor-pointer hover:bg-gray-50 select-none"
-              onClick={() => onSort('dob')}
-            >
-              <div className="flex items-center justify-between">
-                DOB
-                {getSortIcon('dob')}
-              </div>
-            </th>
+            
+            
             <th 
               className="py-2 px-4 border-b cursor-pointer hover:bg-gray-50 select-none"
               onClick={() => onSort('seen')}
