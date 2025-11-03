@@ -1,31 +1,6 @@
-import express from "express";
-import cors from "cors";
-import fileUpload from "express-fileupload";
-import documentRoutes from "./routes/documentRoutes.js";
-import collectionRoutes from "./routes/collectionRoutes.js";
-import customerRoutes from "./routes/customerRoutes.js";
-import dataRoutes from "./routes/dataRoutes.js";
-import { initializeDatabase } from "./models/database.js";
-
-const app = express();
-app.use(cors());
-app.use(express.json());
-app.use(fileUpload());
-
-// Initialize database on startup
-initializeDatabase().catch(console.error);
-
-// Routes
-app.use("/api/documents", documentRoutes);
-app.use("/api/collections", collectionRoutes);
-app.use("/api/customers", customerRoutes);
-app.use("/api/data", dataRoutes);
-
-// Debug route for checking permissions
-app.get("/api/check-permissions", async (req, res) => {
+// Add this to the end of your app.js or create a new route
+app.get('/api/check-permissions', async (req, res) => {
   try {
-    const { query } = await import("./models/database.js");
-    
     // Check table permissions
     const tablePermissions = await query(`
       SELECT table_name, privilege_type
@@ -60,5 +35,3 @@ app.get("/api/check-permissions", async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
-
-export default app;

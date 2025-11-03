@@ -14,17 +14,15 @@ console.log('🔧 Environment Variables:', {
 
 // Database connection pool
 const pool = new Pool({
-  host: process.env.DB_HOST || 'localhost',
+  host: '/cloudsql/pdf2csv-475708:us-central1:pdf2csv-instance',
   port: parseInt(process.env.DB_PORT) || 5432,
   database: process.env.DB_NAME || 'pdf2csv_db',
   user: process.env.DB_USER || 'postgres',
   password: process.env.DB_PASSWORD || 'postgres',
-  ssl: process.env.DB_SSL === 'true' ? {
-    rejectUnauthorized: false
-  } : false,
+  ssl: false, // Always disable SSL for Cloud SQL Unix socket connections
   max: 20, // Maximum number of clients in the pool
   idleTimeoutMillis: 30000, // Close idle clients after 30 seconds
-  connectionTimeoutMillis: 2000, // Return an error after 2 seconds if connection could not be established
+  connectionTimeoutMillis: 5000, // Increased timeout for Cloud SQL connection
 });
 
 // Test database connection
