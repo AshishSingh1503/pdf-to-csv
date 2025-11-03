@@ -5,6 +5,7 @@ import documentRoutes from "./routes/documentRoutes.js";
 import collectionRoutes from "./routes/collectionRoutes.js";
 import customerRoutes from "./routes/customerRoutes.js";
 import dataRoutes from "./routes/dataRoutes.js";
+import testRoutes from "./routes/testRoutes.js";
 import { initializeDatabase } from "./models/database.js";
 
 const app = express();
@@ -36,5 +37,6 @@ app.use("/api/documents", documentRoutes);
 app.use("/api/collections", collectionRoutes);
 app.use("/api/customers", customerRoutes);
 app.use("/api/data", dataRoutes);
+app.use("/api/test", testRoutes);
 
 export default app;
