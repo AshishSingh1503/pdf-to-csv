@@ -8,7 +8,23 @@ import dataRoutes from "./routes/dataRoutes.js";
 import { initializeDatabase } from "./models/database.js";
 
 const app = express();
-app.use(cors());
+
+const allowedOrigins = [
+  "https://pdf2csv-frontend-805037964827.us-central1.run.app",
+  "http://localhost:5173",
+];
+
+const corsOptions = {
+  origin: (origin, callback) => {
+    if (allowedOrigins.includes(origin) || !origin) {
+      callback(null, true);
+    } else {
+      callback(new Error("Not allowed by CORS"));
+    }
+  },
+};
+
+app.use(cors(corsOptions));
 app.use(express.json());
 app.use(fileUpload());
 
