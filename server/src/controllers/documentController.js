@@ -87,12 +87,12 @@ const processPDFFiles = async (fileArray, collectionId, fileMetadatas) => {
       await fileMetadata.updateStatus('completed');
       await fileMetadata.updateCloudStoragePath(uploadedFile[0].url);
 
-      broadcast({ type: 'FILE_PROCESSED', fileMetadata });
+      broadcast({ type: 'FILES_PROCESSED', collectionId: fileMetadata.collection_id, fileMetadata });
 
     } catch (error) {
       console.error(`🔥 Error processing file ${file.name}:`, error);
       await fileMetadata.updateStatus('failed');
-      broadcast({ type: 'FILE_PROCESSED', fileMetadata });
+      broadcast({ type: 'FILES_PROCESSED', collectionId: fileMetadata.collection_id, fileMetadata });
     }
   }
 };
