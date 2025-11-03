@@ -12,7 +12,8 @@ try {
   console.log('✅ Document AI client initialized successfully');
 } catch (error) {
   console.error("🔥 Failed to initialize Document AI client:", error);
-  throw new Error("Failed to initialize Document AI client. Please check your Google Cloud credentials.");
+  // We don't throw an error here to prevent the server from crashing on startup.
+  // The error will be caught and handled in the processPDFs function.
 }
 
 // --- Helper Functions ported from Python ---
