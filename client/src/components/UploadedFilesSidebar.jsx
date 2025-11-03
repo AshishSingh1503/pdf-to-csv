@@ -7,7 +7,6 @@ import ProgressBar from './ProgressBar';
 const UploadedFilesSidebar = ({ isOpen, onClose, selectedCollection }) => {
   const [files, setFiles] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [processingInfo, setProcessingInfo] = useState({ processed: 0, total: 0, estimatedTimeLeft: 0 });
 
   useEffect(() => {
     if (isOpen && selectedCollection) {
@@ -18,24 +17,9 @@ const UploadedFilesSidebar = ({ isOpen, onClose, selectedCollection }) => {
   useEffect(() => {
     socket.onmessage = (event) => {
       const message = JSON.parse(event.data);
-
-      if (message.type === 'FILE_PROCESSED') {
-        setFiles(prevFiles => {
-          return prevFiles.map(file => {
-            if (file.id === message.fileMetadata.id) {
-              return { ...file, ...message.fileMetadata, timeTaken: message.timeTaken };
-            }
-            return file;
-          });
-        });
-        setProcessingInfo(message.progress);
-      }
-
-      if (message.type === 'ALL_FILES_PROCESSED' && message.collectionId === selectedCollection?.id) {
+      if (message.type === 'FILES_PROCESSED' && message.collectionId === selectedCollection?.id) {
         fetchFiles();
-        setProcessingInfo({ processed: 0, total: 0, estimatedTimeLeft: 0 });
       }
-      
       if (message.type === 'FILE_REPROCESSED' && message.collectionId === selectedCollection?.id) {
         fetchFiles();
       }
@@ -83,125 +67,78 @@ const UploadedFilesSidebar = ({ isOpen, onClose, selectedCollection }) => {
     return null;
   }
 
-   return (
-      <>
-        {/* Overlay for mobile */}
-        {isOpen && (
-          <div 
-            className="fixed inset-0 bg-black bg-opacity-50 z-40 md:hidden"
-            onClick={onClose}
-          />
-        )}
-  
-        <div
-          className={`fixed top-0 right-0 h-full bg-white shadow-lg z-50 overflow-y-auto transition-transform duration-300 ease-in-out transform ${
-            isOpen ? "translate-x-0" : "translate-x-full"
-          } w-full md:w-96 flex flex-col`}
-        >
-          {/* Header */}
-          <div className="sticky top-0 bg-white border-b border-gray-200 px-4 py-3 flex justify-between items-center">
-            <h2 className="text-lg font-semibold text-gray-900">Uploaded Files</h2>
-            <button 
-              onClick={onClose}
-              className="p-2 rounded-full hover:bg-gray-100 transition-colors"
-              aria-label="Close sidebar"
-            >
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                className="h-5 w-5 text-gray-500"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-              >
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
-          </div>
-          {/* Content */}
-          <div className="flex-1 overflow-y-auto p-4">
-            {processingInfo.total > 0 && (
-              <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
-                <p className="text-sm font-medium text-blue-900">
-                  Processing: {processingInfo.processed} of {processingInfo.total} files
-                </p>
-                <p className="text-xs text-blue-700">
-                  Estimated time left: {Math.round(processingInfo.estimatedTimeLeft)}s
-                </p>
+  return (
+    <div className="fixed top-0 right-0 h-full w-96 bg-white shadow-lg p-4 z-50 overflow-y-auto">
+      <div className="flex justify-between items-center mb-4">
+        <h2 className="text-xl font-bold">Uploaded Files</h2>
+        <button onClick={onClose} className="text-gray-500 hover:text-gray-700">
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            className="h-6 w-6"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M6 18L18 6M6 6l12 12"
+            />
+          </svg>
+        </button>
+      </div>
+      {loading ? (
+        <p>Loading files...</p>
+      ) : (
+        <div className="space-y-4">
+          {files.map((file) => (
+            <div key={file.id} className="border rounded-lg p-4 bg-gray-50">
+              <div className="flex justify-between items-center">
+                <div>
+                  <p className="font-semibold">{file.original_filename}</p>
+                  <p className="text-sm text-gray-500">
+                    {new Date(file.created_at).toLocaleString()} &nbsp; {(file.file_size / 1024).toFixed(2)} KB
+                  </p>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <button onClick={() => handleDownload(file)} title="Download" className="text-gray-500 hover:text-gray-700">
+                    📄
+                  </button>
+                  {file.processing_status === 'failed' && (
+                    <button onClick={() => handleReprocess(file.id)} title="Reprocess" className="text-gray-500 hover:text-gray-700">
+                      🔄
+                    </button>
+                  )}
+                  <span
+                    className={`px-2 py-1 text-xs font-semibold rounded-full ${
+                      file.processing_status === 'completed'
+                        ? 'text-green-800 bg-green-200'
+                        : file.processing_status === 'processing'
+                        ? 'text-yellow-800 bg-yellow-200'
+                        : 'text-red-800 bg-red-200'
+                    }`}
+                  >
+                    {file.processing_status}
+                  </span>
+                </div>
               </div>
-            )}
-            {loading ? (
-              <div className="flex items-center justify-center h-32">
-                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900"></div>
-              </div>
-            ) : files.length === 0 ? (
-              <div className="text-center py-8 text-gray-500">
-                No files uploaded yet
-              </div>
-            ) : (
-              <div className="space-y-3">
-                {files.map((file) => (
-                  <div key={file.id} className="border rounded-lg p-3 bg-gray-50 hover:bg-gray-100 transition-colors">
-                    <div className="flex flex-col sm:flex-row sm:items-center gap-2">
-                      <div className="flex-1 min-w-0">
-                        <p className="font-medium text-gray-900 truncate">
-                          {file.original_filename}
-                        </p>
-                        <div className="flex flex-wrap gap-x-4 text-xs text-gray-500">
-                          <span>{new Date(file.created_at).toLocaleString()}</span>
-                          <span>{(file.file_size / 1024).toFixed(2)} KB</span>
-                          {file.timeTaken && <span>Time: {file.timeTaken.toFixed(2)}s</span>}
-                        </div>
-                      </div>
-  
-                      <div className="flex items-center gap-2 self-end sm:self-center">
-                        {file.processing_status === 'failed' && (
-                          <button 
-                            onClick={() => handleReprocess(file.id)}
-                            className="p-2 hover:bg-gray-200 rounded-full transition-colors"
-                            title="Reprocess"
-                          >
-                            <svg className="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                            </svg>
-                          </button>
-                        )}
-  
-                        {file.processing_status === 'processing' ? (
-                          <div className="flex items-center gap-2">
-                            <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-yellow-700"></div>
-                            <span className="text-xs font-medium text-yellow-700">Processing...</span>
-                          </div>
-                        ) : (
-                          <span
-                            className={`px-2 py-1 text-xs font-medium rounded-full ${
-                              file.processing_status === 'completed'
-                                ? 'text-green-700 bg-green-100'
-                                : 'text-red-700 bg-red-100'
-                            }`}
-                          >
-                            {file.processing_status}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-  
-          {/* Footer */}
-          <div className="sticky bottom-0 bg-white border-t border-gray-200 p-4">
-            <button 
-              onClick={onClose}
-              className="w-full bg-gray-900 text-white px-4 py-2 rounded-lg hover:bg-gray-800 transition-colors focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2"
-            >
-              Close
-            </button>
-          </div>
+              {file.processing_status === 'processing' && (
+                <div className="mt-2">
+                  <ProgressBar progress={file.upload_progress} />
+                </div>
+              )}
+            </div>
+          ))}
         </div>
-      </>
-    );
-  };
+      )}
+      <div className="absolute bottom-4 right-4">
+        <button onClick={onClose} className="bg-gray-800 text-white px-4 py-2 rounded-lg hover:bg-gray-900">
+          Close
+        </button>
+      </div>
+    </div>
+  );
+};
 
 export default UploadedFilesSidebar;

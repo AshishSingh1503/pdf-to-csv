@@ -9,7 +9,7 @@ env_variables:
   DB_HOST: /cloudsql/pdf2csv-475708:us-central1:pdf2csv-instance
   DB_PORT: 5432
   DB_NAME: pdf2csv_db
-  DB_USER: pdf2csv_user
+  DB_USER: postgres
   DB_PASSWORD: postgres
   DB_SSL: true
   INPUT_BUCKET: pdf-data-extraction-input-bucket

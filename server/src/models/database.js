@@ -2,27 +2,19 @@
 import { Pool } from 'pg';
 import { config } from '../config/index.js';
 
-// Log environment variables for debugging
-console.log('🔧 Environment Variables:', {
-  DB_HOST: process.env.DB_HOST,
-  DB_PORT: process.env.DB_PORT,
-  DB_NAME: process.env.DB_NAME,
-  DB_USER: process.env.DB_USER,
-  DB_SSL: process.env.DB_SSL,
-  NODE_ENV: process.env.NODE_ENV
-});
-
 // Database connection pool
 const pool = new Pool({
-  host: '/cloudsql/pdf2csv-475708:us-central1:pdf2csv-instance',
+  host: process.env.DB_HOST || 'localhost',
   port: parseInt(process.env.DB_PORT) || 5432,
   database: process.env.DB_NAME || 'pdf2csv_db',
   user: process.env.DB_USER || 'postgres',
   password: process.env.DB_PASSWORD || 'postgres',
-  ssl: false, // Always disable SSL for Cloud SQL Unix socket connections
+  ssl: process.env.DB_SSL === 'true' ? {
+    rejectUnauthorized: false
+  } : false,
   max: 20, // Maximum number of clients in the pool
   idleTimeoutMillis: 30000, // Close idle clients after 30 seconds
-  connectionTimeoutMillis: 5000, // Increased timeout for Cloud SQL connection
+  connectionTimeoutMillis: 2000, // Return an error after 2 seconds if connection could not be established
 });
 
 // Test database connection
@@ -56,12 +48,7 @@ export const getClient = async () => {
 
 // Initialize database tables
 export const initializeDatabase = async () => {
-  console.log('🚀 Starting database initialization...');
   try {
-    // Test connection first
-    console.log('🔍 Testing database connection...');
-    const testResult = await query('SELECT NOW() as current_time');
-    console.log('✅ Database connection successful:', testResult.rows[0]);
     // Create customers table
     await query(`
       CREATE TABLE IF NOT EXISTS customers (
@@ -99,10 +86,10 @@ export const initializeDatabase = async () => {
         id SERIAL PRIMARY KEY,
         collection_id INTEGER REFERENCES collections(id) ON DELETE CASCADE,
         full_name VARCHAR(255),
-        dateofbirth VARCHAR(50),
-        address TEXT,
         mobile VARCHAR(20),
         email VARCHAR(255),
+        address TEXT,
+        dateofbirth VARCHAR(50),
         landline VARCHAR(20),
         lastseen VARCHAR(50),
         file_name VARCHAR(255),
@@ -118,10 +105,10 @@ export const initializeDatabase = async () => {
         collection_id INTEGER REFERENCES collections(id) ON DELETE CASCADE,
         first_name VARCHAR(255),
         last_name VARCHAR(255),
-        dateofbirth VARCHAR(50),
-        address TEXT,
         mobile VARCHAR(20),
         email VARCHAR(255),
+        address TEXT,
+        dateofbirth VARCHAR(50),
         landline VARCHAR(20),
         lastseen VARCHAR(50),
         file_name VARCHAR(255),
@@ -169,14 +156,8 @@ export const initializeDatabase = async () => {
 
     console.log('✅ Database tables initialized successfully');
   } catch (error) {
-    console.error('❌ Database initialization failed:', {
-      message: error.message,
-      code: error.code,
-      detail: error.detail,
-      stack: error.stack
-    });
-    // Don't throw to prevent app crash
-    console.log('⚠️ Continuing without database...');
+    console.error('❌ Error initializing database:', error);
+    throw error;
   }
 };
 

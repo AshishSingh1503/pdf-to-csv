@@ -32,7 +32,6 @@ const Home = () => {
   const itemsPerPage = 50;
   const [downloadLinks, setDownloadLinks] = useState(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-  const [isCustomerSidebarOpen, setIsCustomerSidebarOpen] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
 
   const handleUpload = async (newFiles, collectionId) => {
@@ -127,15 +126,6 @@ const Home = () => {
   useEffect(() => {
     fetchData();
   }, [selectedCollection, searchTerm, currentPage, isPostProcess]);
-
-  useEffect(() => {
-    socket.onmessage = (event) => {
-      const message = JSON.parse(event.data);
-      if (message.type === 'ALL_FILES_PROCESSED' && message.collectionId === selectedCollection?.id) {
-        fetchData();
-      }
-    };
-  }, [selectedCollection]);
 
   const handleSearch = (term) => {
     setSearchTerm(term);
@@ -239,15 +229,15 @@ const Home = () => {
 
   return (
     <div className="flex h-screen bg-gray-50">
-      <CustomersSidebar
-        selectedCustomer={selectedCustomer}
-        onCustomerSelect={handleCustomerSelect}
-        selectedCollection={selectedCollection}
-        onCollectionSelect={handleCollectionSelect}
-        onRefresh={fetchData}
-        isOpen={isCustomerSidebarOpen}
-        onClose={() => setIsCustomerSidebarOpen(false)}
-      />
+      {showCollectionsSidebar && (
+        <CustomersSidebar
+          selectedCustomer={selectedCustomer}
+          onCustomerSelect={handleCustomerSelect}
+          selectedCollection={selectedCollection}
+          onCollectionSelect={handleCollectionSelect}
+          onRefresh={fetchData}
+        />
+      )}
       
       <div className="flex-1 flex flex-col">
         <Header 
@@ -256,7 +246,6 @@ const Home = () => {
           selectedCollection={selectedCollection}
           onCollectionChange={setSelectedCollection}
           onToggleSidebar={() => setIsSidebarOpen(!isSidebarOpen)}
-          onToggleCustomersSidebar={() => setIsCustomerSidebarOpen(!isCustomerSidebarOpen)}
         />
         
         <main className="flex-1 overflow-y-auto">

@@ -4,7 +4,7 @@ import { collectionsApi } from "../api/collectionsApi";
 import CustomerModal from "./CustomerModal";
 import CollectionModal from "./CollectionModal";
 
-const CustomersSidebar = ({ selectedCustomer, onCustomerSelect, onCollectionSelect, onRefresh, isOpen, onClose }) => {
+const CustomersSidebar = ({ selectedCustomer, onCustomerSelect, onCollectionSelect, onRefresh }) => {
   const [customers, setCustomers] = useState([]);
   const [collections, setCollections] = useState({});
   const [loading, setLoading] = useState(true);
@@ -95,42 +95,17 @@ const CustomersSidebar = ({ selectedCustomer, onCustomerSelect, onCollectionSele
   };
 
   return (
-    <div
-      className={`fixed top-0 left-0 h-full bg-white border-r border-gray-200 flex flex-col transition-transform transform ${
-        isOpen ? "translate-x-0" : "-translate-x-full"
-      } lg:relative lg:translate-x-0 w-80 z-20`}
-    >
+    <div className="w-80 bg-white border-r border-gray-200 flex flex-col h-full">
       {/* Header */}
       <div className="p-4 border-b border-gray-200">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-semibold text-gray-900">Customers</h2>
-          <div className="flex items-center">
-            <button
-              onClick={handleCreateCustomer}
-              className="px-3 py-1 bg-blue-600 text-white text-sm rounded-md hover:bg-blue-700"
-            >
-              + New Customer
-            </button>
-            <button
-              onClick={onClose}
-              className="lg:hidden ml-2 text-gray-500 hover:text-gray-700"
-            >
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                className="h-6 w-6"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M6 18L18 6M6 6l12 12"
-                />
-              </svg>
-            </button>
-          </div>
+          <button
+            onClick={handleCreateCustomer}
+            className="px-3 py-1 bg-blue-600 text-white text-sm rounded-md hover:bg-blue-700"
+          >
+            + New Customer
+          </button>
         </div>
       </div>
 

@@ -7,10 +7,10 @@ export class PostProcessRecord {
     this.collection_id = data.collection_id;
     this.first_name = data.first_name;
     this.last_name = data.last_name;
-    this.dateofbirth = data.dateofbirth;
-    this.address = data.address;
     this.mobile = data.mobile;
     this.email = data.email;
+    this.address = data.address;
+    this.dateofbirth = data.dateofbirth;
     this.landline = data.landline;
     this.lastseen = data.lastseen;
     this.file_name = data.file_name;
@@ -24,10 +24,10 @@ export class PostProcessRecord {
       collection_id,
       first_name,
       last_name,
-      dateofbirth,
-      address,
       mobile,
       email,
+      address,
+      dateofbirth,
       landline,
       lastseen,
       file_name,
@@ -36,10 +36,10 @@ export class PostProcessRecord {
 
     const result = await query(
       `INSERT INTO post_process_records 
-       (collection_id, first_name, last_name,dateofbirth, address, mobile, email, landline, lastseen, file_name, processing_timestamp)
+       (collection_id, first_name, last_name, mobile, email, address, dateofbirth, landline, lastseen, file_name, processing_timestamp)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
        RETURNING *`,
-      [collection_id, first_name, last_name, dateofbirth, address, mobile, email, landline, lastseen, file_name, processing_timestamp]
+      [collection_id, first_name, last_name, mobile, email, address, dateofbirth, landline, lastseen, file_name, processing_timestamp]
     );
     return new PostProcessRecord(result.rows[0]);
   }
@@ -57,10 +57,10 @@ export class PostProcessRecord {
       record.collection_id,
       record.first_name,
       record.last_name,
-      record.dateofbirth,
-      record.address,
       record.mobile,
       record.email,
+      record.address,
+      record.dateofbirth,
       record.landline,
       record.lastseen,
       record.file_name,
@@ -69,7 +69,7 @@ export class PostProcessRecord {
 
     const result = await query(
       `INSERT INTO post_process_records 
-       (collection_id, first_name, last_name, dateofbirth, address ,  mobile, email , landline, lastseen, file_name, processing_timestamp)
+       (collection_id, first_name, last_name, mobile, email, address, dateofbirth, landline, lastseen, file_name, processing_timestamp)
        VALUES ${values}
        RETURNING *`,
       params

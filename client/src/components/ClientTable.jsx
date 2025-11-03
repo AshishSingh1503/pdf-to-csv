@@ -23,17 +23,17 @@ const ClientTable = ({ data, isPostProcess, sortField, sortDirection, onSort }) 
     } else {
       if (displayField === 'FULL NAME') return 'full_name';
     }
-    if (displayField === 'DOB') return 'dob';
-    if (displayField === 'ADDRESS') return 'address';
     if (displayField === 'MOBILE') return 'mobile';
     if (displayField === 'EMAIL') return 'email';
+    if (displayField === 'ADDRESS') return 'address';
+    if (displayField === 'DOB') return 'dob';
     if (displayField === 'SEEN') return 'seen';
     if (displayField === 'SOURCE') return 'source';
     return null;
   };
 
   return (
-    <div className="p-4 overflow-x-auto">
+    <div className="p-4">
       <table className="min-w-full bg-white">
         <thead>
           <tr>
@@ -69,25 +69,6 @@ const ClientTable = ({ data, isPostProcess, sortField, sortDirection, onSort }) 
                 </div>
               </th>
             )}
-             <th 
-                          className="py-2 px-4 border-b cursor-pointer hover:bg-gray-50 select-none"
-                          onClick={() => onSort('dob')}
-                        >
-                          <div className="flex items-center justify-between">
-                            DOB
-                            {getSortIcon('dob')}
-                          </div>
-                        </th>
-                         <th 
-              className="py-2 px-4 border-b cursor-pointer hover:bg-gray-50 select-none"
-              onClick={() => onSort('address')}
-            >
-              <div className="flex items-center justify-between">
-                ADDRESS
-                {getSortIcon('address')}
-              </div>
-            </th>
-           
             <th 
               className="py-2 px-4 border-b cursor-pointer hover:bg-gray-50 select-none"
               onClick={() => onSort('mobile')}
@@ -106,7 +87,24 @@ const ClientTable = ({ data, isPostProcess, sortField, sortDirection, onSort }) 
                 {getSortIcon('email')}
               </div>
             </th>
-           
+            <th 
+              className="py-2 px-4 border-b cursor-pointer hover:bg-gray-50 select-none"
+              onClick={() => onSort('address')}
+            >
+              <div className="flex items-center justify-between">
+                ADDRESS
+                {getSortIcon('address')}
+              </div>
+            </th>
+            <th 
+              className="py-2 px-4 border-b cursor-pointer hover:bg-gray-50 select-none"
+              onClick={() => onSort('dob')}
+            >
+              <div className="flex items-center justify-between">
+                DOB
+                {getSortIcon('dob')}
+              </div>
+            </th>
             <th 
               className="py-2 px-4 border-b cursor-pointer hover:bg-gray-50 select-none"
               onClick={() => onSort('seen')}
@@ -138,10 +136,10 @@ const ClientTable = ({ data, isPostProcess, sortField, sortDirection, onSort }) 
               ) : (
                 <td className="py-2 px-4 border-b">{client.full_name || ''}</td>
               )}
-              <td className="py-2 px-4 border-b">{client.dob || ''}</td>
-              <td className="py-2 px-4 border-b">{client.address || ''}</td>
               <td className="py-2 px-4 border-b">{client.mobile || ''}</td>
               <td className="py-2 px-4 border-b">{client.email || ''}</td>
+              <td className="py-2 px-4 border-b">{client.address || ''}</td>
+              <td className="py-2 px-4 border-b">{client.dob || ''}</td>
               <td className="py-2 px-4 border-b">{client.seen || ''}</td>
               <td className="py-2 px-4 border-b">{client.source || ''}</td>
             </tr>

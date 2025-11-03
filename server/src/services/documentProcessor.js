@@ -5,30 +5,22 @@ import fs from "fs";
 import path from "path";
 
 // Initialize Document AI client
-let client;  
-try {  
-  // In production, use Application Default Credentials (ADC)  
-  // In development, use the credentials file from config  
-  const clientConfig = process.env.NODE_ENV === 'production'   
-    ? {}   
-    : { keyFilename: config.credentials };  
-    
-  client = new DocumentProcessorServiceClient(clientConfig);  
-  console.log('✅ Document AI client initialized successfully');  
-} catch (error) {  
-  console.error("🔥 Failed to initialize Document AI client:", error);  
-  throw new Error("Failed to initialize Document AI client. Please check your Google Cloud credentials.");  
+let client;
+try {
+  const clientConfig = process.env.NODE_ENV === 'production' ? {} : { keyFilename: config.credentials };
+  client = new DocumentProcessorServiceClient(clientConfig);
+  console.log('✅ Document AI client initialized successfully');
+} catch (error) {
+  console.error("🔥 Failed to initialize Document AI client:", error);
+  throw new Error("Failed to initialize Document AI client. Please check your Google Cloud credentials.");
 }
 
 // --- Helper Functions ported from Python ---
 
 const extractEntitiesSimple = (document) => {
-  if (!document || !document.entities) {
-    return [];
-  }
   return document.entities.map(entity => ({
-    type: entity.type?.toLowerCase().trim() || '',
-    value: entity.mentionText?.trim() || '',
+    type: entity.type.toLowerCase().trim(),
+    value: entity.mentionText.trim(),
   }));
 };
 
@@ -65,64 +57,29 @@ const simpleGrouping = (entities) => {
   return records;
 };
 
-const singleLineAddress = (address) => {
-  if (!address) return '';
-  let s = address.replace(/\r|\n/g, ' ');
-  s = s.replace(/[,;\|/]+/g, ' ');
-  s = s.replace(/\s+/g, ' ').trim();
-  s = s.replace(/\.$/, '');
-  return s;
-}
-
 const fixAddressOrdering = (address) => {
     if (!address) return address;
+    address = address.trim();
 
-    address = singleLineAddress(address);
-    let s = address.trim();
-
-    // Pattern A: State + Postcode at the beginning -> move to end
-    let m = s.match(/^\s*([A-Za-z]{2,3})\s+(\d{4})\s+(.+)$/i);
-    if (m) {
-        const state = m[1].toUpperCase();
-        const postcode = m[2];
-        const rest = m[3].trim();
-        const out = `${rest} ${state} ${postcode}`;
-        return out.replace(/\s+/g, ' ').trim();
+    const postcodeStatePattern = /^([A-Z]{2,3}\s+\d{4})\s+(.+)$/;
+    let match = address.match(postcodeStatePattern);
+    if (match) {
+        return `${match[2]} ${match[1]}`;
     }
 
-    // Pattern B: Postcode at beginning and state at end (e.g. '2289 ... NSW')
-    m = s.match(/^\s*(\d{4})\s+(.+?)\s+([A-Za-z]{2,3})\s*$/i);
-    if (m) {
-        const postcode = m[1];
-        const rest = m[2].trim();
-        const state = m[3].toUpperCase();
-        const out = `${rest} ${state} ${postcode}`;
-        return out.replace(/\s+/g, ' ').trim();
+    const postcodeOnlyPattern = /^(\d{4})\s+(.+?)\s+([A-Z]{2,3})$/;
+    match = address.match(postcodeOnlyPattern);
+    if (match) {
+        return `${match[2]} ${match[3]} ${match[1]}`;
     }
 
-    // Pattern C: State + Postcode in the middle (e.g. '114 Northcott Drive NSW 2289 ADAMSTOWN HEIGHTS')
-    m = s.match(/^(.+?)\s+([A-Za-z]{2,3})\s+(\d{4})\s+(.+)$/i);
-    if (m) {
-        const part1 = m[1].trim();
-        const state = m[2].toUpperCase();
-        const postcode = m[3];
-        const part2 = m[4].trim();
-        const out = `${part1} ${part2} ${state} ${postcode}`;
-        return out.replace(/\s+/g, ' ').trim();
+    const statePostcodeMiddlePattern = /^(.+?)\s+([A-Z]{2,3}\s+\d{4})\s+(.+)$/;
+    match = address.match(statePostcodeMiddlePattern);
+    if (match) {
+        return `${match[1]} ${match[3]} ${match[2]}`;
     }
 
-    // Pattern D: If any state+postcode pair exists anywhere, pull it out and put at the end
-    m = s.match(/([A-Za-z]{2,3})\s+(\d{4})/i);
-    if (m) {
-        const state = m[1].toUpperCase();
-        const postcode = m[2];
-        const rest = (s.substring(0, m.index) + s.substring(m.index + m[0].length)).trim();
-        const cleanedRest = rest.replace(/\s+/g, ' ');
-        const out = `${cleanedRest} ${state} ${postcode}`.trim();
-        return out.replace(/\s+/g, ' ');
-    }
-
-    return s;
+    return address;
 };
 
 const cleanName = (name) => {
@@ -132,7 +89,7 @@ const cleanName = (name) => {
   s = s.replace(/[\d?]+/g, '');
   s = s.replace(/[^A-Za-zÀ-ÖØ-öø-ÿ'\-\s]/g, '');
   s = s.replace(/\s+/g, ' ').trim();
-  const parts = s ? s.split(' ').map(p => p.charAt(0).toUpperCase() + p.slice(1).toLowerCase()) : [];
+  const parts = s ? s.split(' ').map(p => p.charAt(0).toUpperCase() + p.slice(1)) : [];
   return parts.join(' ').trim();
 };
 
@@ -188,18 +145,17 @@ const cleanAndValidate = (records) => {
     const mobileDigits = mobile.replace(/\D/g, '');
     if (!(mobileDigits.length === 10 && mobileDigits.startsWith('04'))) continue;
     
-    const fixedAddress = fixAddressOrdering(address);
-    
-    if (!fixedAddress || !/\d/.test(fixedAddress.substring(0, 15))) continue;
+    if (!address || !/\d/.test(address.substring(0, 15))) continue;
 
+    const fixedAddress = fixAddressOrdering(address);
 
     cleanRecords.push({
       first_name: firstName,
       last_name: lastName,
-      dateofbirth: dateofbirth || '',
-      address: fixedAddress,
       mobile: mobileDigits,
+      address: fixedAddress,
       email: email || '',
+      dateofbirth: dateofbirth || '',
       landline: landline || '',
       lastseen: lastseen || '',
     });
@@ -253,10 +209,10 @@ export const processPDFs = async (pdfFiles) => {
 
       const preProcessingRecords = rawRecords.map(record => ({
         full_name: `${record.first_name || ''} ${record.last_name || ''}`.trim(),
-        dateofbirth: record.dateofbirth,
-        address: record.address,
         mobile: record.mobile,
+        address: record.address,
         email: record.email,
+        dateofbirth: record.dateofbirth,
         landline: record.landline,
         lastseen: record.lastseen,
         file_name: record.file_name
@@ -289,10 +245,10 @@ export const processPDFs = async (pdfFiles) => {
         },
         field_counts: {
             names: rawRecords.filter(r => r.first_name).length,
-            dateofbirths: rawRecords.filter(r => r.dateofbirth).length,
-            addresses: rawRecords.filter(r => r.address).length,
             mobiles: rawRecords.filter(r => r.mobile).length,
+            addresses: rawRecords.filter(r => r.address).length,
             emails: rawRecords.filter(r => r.email).length,
+            dateofbirths: rawRecords.filter(r => r.dateofbirth).length,
             landlines: rawRecords.filter(r => r.landline).length,
             lastseens: rawRecords.filter(r => r.lastseen).length
         },
