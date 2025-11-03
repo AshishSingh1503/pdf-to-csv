@@ -9,12 +9,10 @@ const pool = new Pool({
   database: process.env.DB_NAME || 'pdf2csv_db',
   user: process.env.DB_USER || 'postgres',
   password: process.env.DB_PASSWORD || 'postgres',
-  ssl: process.env.DB_SSL === 'true' ? {
-    rejectUnauthorized: false
-  } : false,
+  ssl: process.env.DB_HOST?.includes('/cloudsql/') ? false : (process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : false),
   max: 20, // Maximum number of clients in the pool
   idleTimeoutMillis: 30000, // Close idle clients after 30 seconds
-  connectionTimeoutMillis: 2000, // Return an error after 2 seconds if connection could not be established
+  connectionTimeoutMillis: 10000, // Increased timeout for Cloud SQL connection
 });
 
 // Test database connection
