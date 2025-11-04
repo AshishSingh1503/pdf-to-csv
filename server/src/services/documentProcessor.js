@@ -612,24 +612,27 @@ export const processPDFs = async (pdfFiles, batchSize = 10, maxWorkers = 4) => {
     setupGracefulShutdown();
   }
 
-  // Auto-scale workers with GCP safety limits
-  let scaledWorkers = SAFE_MAX_WORKERS;
-  if (pdfFiles.length === 1) {
-    scaledWorkers = 2;  // Single file: minimal overhead
-  } else if (pdfFiles.length === 2) {
-    scaledWorkers = 5;  // Two files: use 5 workers for parallelization
-  } else if (pdfFiles.length <= 10) {
-    scaledWorkers = 5;  // Small batch: 5 workers
-  } else if (pdfFiles.length <= 50) {
-    scaledWorkers = 8;  // Medium batch: 8 workers
-  } else {
-    scaledWorkers = 12; // Large batch: 12 workers (GCP safe max)
-  }
-
-  console.log(`📊 Processing ${pdfFiles.length} files | Workers: ${scaledWorkers} | Pool: ${workerThreadPool ? WORKER_THREAD_POOL_SIZE : 0} threads`);
-  const limit = pLimit(scaledWorkers);
-  const startTime = Date.now();
-
+   // ⭐ NEW LOGIC: Scale workers based on file count
+   let scaledWorkers = SAFE_MAX_WORKERS;
+   
+   if (pdfFiles.length === 1) {
+     scaledWorkers = 2;
+   } else if (pdfFiles.length === 2) {
+     scaledWorkers = 5;
+   } else if (pdfFiles.length <= 10) {
+     scaledWorkers = 5;
+   } else if (pdfFiles.length <= 30) {
+     scaledWorkers = pdfFiles.length;  // ⭐ NEW: Send ALL to Google immediately!
+   } else if (pdfFiles.length <= 100) {
+     scaledWorkers = 50;  // ⭐ For 100 files, use 50 workers
+   } else {
+     scaledWorkers = 75;  // ⭐ For 100+ files, use 75 workers
+   }
+ 
+   console.log(`📊 Processing ${pdfFiles.length} files | Workers: ${scaledWorkers} | Pool: ${workerThreadPool ? WORKER_THREAD_POOL_SIZE : 0} threads`);
+   const limit = pLimit(scaledWorkers);  // ⭐ Use dynamic concurrency
+   const startTime = Date.now();
+   
   try {
     const tempDir = path.join(process.cwd(), "temp");
     if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
