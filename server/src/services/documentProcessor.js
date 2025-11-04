@@ -1,5 +1,6 @@
 // server/src/services/documentProcessor.js
 import { DocumentProcessorServiceClient } from "@google-cloud/documentai";
+import  Parser from "name-parser";
 import { config } from "../config/index.js";
 import fs from "fs";
 import path from "path";
@@ -7,6 +8,8 @@ import pLimit from "p-limit";
 import { Worker } from "worker_threads";
 import os from "os";
 import { promises as fsPromises } from "fs";
+// import pkg from 'name-parser';
+// const { Parser } = pkg;
 
 
 // --- CONFIGURATION & CONSTANTS ---
@@ -20,11 +23,13 @@ const INITIAL_BACKOFF_MS = 1000;
 const REQUEST_TIMEOUT_MS = 600000; // 10 minutes for large PDFs
 
 
+
 // --- Global State Management ---
 let client;
 let workerThreadPool = null;
 let activeRequests = 0;
 const MAX_CONCURRENT_REQUESTS = 15; // Hard cap for GCP quota safety
+
 
 try {
   const clientConfig = process.env.NODE_ENV === 'production' ? {} : { keyFilename: config.credentials };
@@ -34,6 +39,7 @@ try {
   console.error("🔥 Failed to initialize Document AI client:", error);
   throw new Error("Failed to initialize Document AI client. Please check your Google Cloud credentials.");
 }
+
 
 
 // --- OPTIMIZATION 6: Pre-compiled Regex Patterns ---
@@ -54,6 +60,7 @@ const REGEX_PATTERNS = {
 };
 
 
+
 // --- WORKER THREAD POOL MANAGEMENT ---
 class WorkerThreadPool {
   constructor(poolSize) {
@@ -63,6 +70,7 @@ class WorkerThreadPool {
     this.activeCount = 0;
     this.initialize();
   }
+
 
   initialize() {
     for (let i = 0; i < this.poolSize; i++) {
@@ -74,9 +82,11 @@ class WorkerThreadPool {
     console.log(`🧵 Worker thread pool initialized with ${this.poolSize} slots`);
   }
 
+
   async runTask(task) {
     return new Promise((resolve, reject) => {
       const availableWorker = this.workers.find(w => w.isAvailable);
+
 
       if (availableWorker) {
         this.executeOnWorker(availableWorker, task, resolve, reject);
@@ -85,6 +95,7 @@ class WorkerThreadPool {
       }
     });
   }
+
 
   executeOnWorker(workerSlot, task, resolve, reject) {
     // PITFALL FIX: Lazy initialize workers to avoid startup overhead
@@ -98,8 +109,10 @@ class WorkerThreadPool {
       });
     }
 
+
     workerSlot.isAvailable = false;
     this.activeCount++;
+
 
     const timeout = setTimeout(() => {
       reject(new Error('Worker task timeout'));
@@ -108,10 +121,12 @@ class WorkerThreadPool {
       this.processQueue();
     }, 60000); // 60s per worker task
 
+
     workerSlot.worker.once('message', (result) => {
       clearTimeout(timeout);
       workerSlot.isAvailable = true;
       this.activeCount--;
+
 
       if (result.error) {
         reject(new Error(result.error));
@@ -119,8 +134,10 @@ class WorkerThreadPool {
         resolve(result);
       }
 
+
       this.processQueue();
     });
+
 
     workerSlot.worker.on('error', (error) => {
       clearTimeout(timeout);
@@ -131,8 +148,10 @@ class WorkerThreadPool {
       this.processQueue();
     });
 
+
     workerSlot.worker.postMessage(task);
   }
+
 
   processQueue() {
     if (this.taskQueue.length > 0 && this.workers.some(w => w.isAvailable)) {
@@ -141,6 +160,7 @@ class WorkerThreadPool {
       this.executeOnWorker(availableWorker, task, resolve, reject);
     }
   }
+
 
   async terminate() {
     for (const workerSlot of this.workers) {
@@ -157,7 +177,9 @@ class WorkerThreadPool {
 }
 
 
+
 // --- Helper Functions ---
+
 
 const extractEntitiesSimple = (document) => {
   return document.entities?.map(entity => ({
@@ -166,46 +188,51 @@ const extractEntitiesSimple = (document) => {
   })) || [];
 };
 
-// --- OPTIMIZATION 8: Improved Name Parsing ---
+
+
+// ⭐ UPDATED: Use name-parser library for accurate name splitting
 const parseFullName = (fullName) => {
   if (!fullName) return { first: '', last: '' };
 
-  // Step 1: Trim and normalize whitespace
-  let name = fullName.trim();
-  if (!name) return { first: '', last: '' };
+  try {
+    // Use name-parser library for accurate parsing
+    const parsed = new Parser(fullName);
+    const firstName = parsed.firstName() || '';
+    const lastName = parsed.lastName() || '';
 
-  // Step 2: Remove common titles (Mr., Mrs., Ms., Dr., Prof., etc.)
-  const titles = [
-    'Mr\\.?', 'Mrs\\.?', 'Ms\\.?', 'Miss\\.?',
-    'Dr\\.?', 'Prof\\.?', 'Prof\\. Dr\\.?',
-    'Sir', 'Madam',
-    'Sr\\.?', 'Jr\\.?', 'II', 'III', 'IV'
-  ];
-  
-  for (const title of titles) {
-    name = name.replace(new RegExp(`^${title}\\s+`, 'i'), '');
-  }
+    // Validate that we got meaningful results
+    if (!firstName && !lastName) {
+      console.warn(`⚠️  name-parser couldn't parse: "${fullName}"`);
+      // Fallback to manual split if library fails
+      const parts = fullName.trim().split(/\s+/);
+      return {
+        first: parts[0] || '',
+        last: parts.slice(1).join(' ') || ''
+      };
+    }
 
-  // Step 3: Remove extra whitespace (multiple spaces → single space)
-  name = name.replace(/\s+/g, ' ').trim();
+    // If one is missing but we have the other, use manual fallback for completeness
+    if ((!firstName || !lastName) && fullName.trim()) {
+      const parts = fullName.trim().split(/\s+/);
+      return {
+        first: firstName || parts[0] || '',
+        last: lastName || parts.slice(1).join(' ') || ''
+      };
+    }
 
-  if (!name) return { first: '', last: '' };
-
-  // Step 4: Split into parts
-  const parts = name.split(' ').filter(part => part.length > 0);
-
-  if (parts.length === 0) {
-    return { first: '', last: '' };
-  } else if (parts.length === 1) {
-    // Only one part: treat as first name, last name empty
-    return { first: parts, last: '' };
-  } else {
-    // Multiple parts: first is first name, rest is last name
-    const first = parts;
-    const last = parts.slice(1).join(' ');
-    return { first, last };
+    return { first: firstName, last: lastName };
+  } catch (error) {
+    console.error(`❌ Name parser error for "${fullName}":`, error.message);
+    // Emergency fallback to manual parsing
+    const parts = fullName.trim().split(/\s+/);
+    return {
+      first: parts[0] || '',
+      last: parts.slice(1).join(' ') || ''
+    };
   }
 };
+
+
 
 const simpleGrouping = (entities) => {
   const records = [];
@@ -221,13 +248,14 @@ const simpleGrouping = (entities) => {
 
   for (let i = 0; i < maxCount; i++) {
     const record = {};
-    // ✅ AFTER
+    
     if (i < names.length) {
+      // ⭐ Use name-parser for accurate first/last name splitting
       const { first, last } = parseFullName(names[i]);
       record.first_name = first;
       record.last_name = last;
     }
-
+    
     if (i < mobiles.length) record.mobile = mobiles[i];
     if (i < addresses.length) record.address = addresses[i];
     if (i < emails.length) record.email = emails[i];
@@ -243,6 +271,7 @@ const simpleGrouping = (entities) => {
 };
 
 
+
 const _single_line_address = (address) => {
   if (!address) return '';
   let s = address.replace(/\r/g, ' ').replace(/\n/g, ' ');
@@ -251,6 +280,7 @@ const _single_line_address = (address) => {
   s = s.endsWith('.') ? s.slice(0, -1) : s;
   return s;
 }
+
 
 
 const fixAddressOrdering = (address) => {
@@ -293,6 +323,7 @@ const fixAddressOrdering = (address) => {
 };
 
 
+
 const cleanName = (name) => {
   if (!name) return '';
   let s = name.trim();
@@ -303,6 +334,7 @@ const cleanName = (name) => {
   const parts = s ? s.split(' ').map(p => p.charAt(0).toUpperCase() + p.slice(1)) : [];
   return parts.join(' ').trim();
 };
+
 
 
 const normalizeDateField = (dateStr) => {
@@ -332,11 +364,13 @@ const normalizeDateField = (dateStr) => {
 };
 
 
+
 const isValidLandline = (landline) => {
   if (!landline) return false;
   const digits = landline.replace(REGEX_PATTERNS.digitOnly, '');
   return digits.length >= 10;
 };
+
 
 
 // --- OPTIMIZATION 4: Exponential Backoff with Rate Limit Checking ---
@@ -383,6 +417,7 @@ const retryWithBackoff = async (fn, maxRetries = RETRY_ATTEMPTS, initialDelay = 
 };
 
 
+
 // --- OPTIMIZATION 2: Batch Database Inserts ---
 export const batchInsertRecords = async (records, dbClient, batchSize = BATCH_SIZE_RECORDS) => {
   if (!records || records.length === 0) {
@@ -418,6 +453,7 @@ export const batchInsertRecords = async (records, dbClient, batchSize = BATCH_SI
 };
 
 
+
 // --- OPTIMIZATION 3 & 7: Async File Operations ---
 const readFileBuffered = async (tempPath) => {
   try {
@@ -427,6 +463,7 @@ const readFileBuffered = async (tempPath) => {
     throw error;
   }
 };
+
 
 
 const cleanupTempFile = async (tempPath) => {
@@ -439,6 +476,7 @@ const cleanupTempFile = async (tempPath) => {
     }
   }
 };
+
 
 
 // --- OPTIMIZATION 5: Parallel JSON Generation ---
@@ -507,6 +545,7 @@ const generateJsonObjects = async (rawRecords, filteredRecords, entities, rawTex
 };
 
 
+
 // --- OPTIMIZATION 5: Batch Record Processing in Parallel ---
 const batchValidateRecords = async (records, batchSize = 100) => {
   if (records.length <= batchSize || !workerThreadPool) {
@@ -538,22 +577,25 @@ const batchValidateRecords = async (records, batchSize = 100) => {
 };
 
 
+
+// ⭐ UPDATED: Use safe String().trim() for all field access
 const cleanAndValidate = (records) => {
   const cleanRecords = [];
 
   for (const record of records) {
-    const rawFirst = record.first_name?.trim() || '';
-    const rawLast = record.last_name?.trim() || '';
-    const rawDob = record.dateofbirth?.trim() || '';
-    const rawLastseen = record.lastseen?.trim() || '';
+    // ⭐ Use String() to safely convert any type to string before trim()
+    const rawFirst = String(record.first_name || '').trim();
+    const rawLast = String(record.last_name || '').trim();
+    const rawDob = String(record.dateofbirth || '').trim();
+    const rawLastseen = String(record.lastseen || '').trim();
 
     const firstName = cleanName(rawFirst);
     const lastName = cleanName(rawLast);
 
-    const mobile = record.mobile?.trim() || '';
-    let address = record.address?.trim() || '';
-    const email = record.email?.trim() || '';
-    const rawLandline = record.landline?.trim() || '';
+    const mobile = String(record.mobile || '').trim();
+    let address = String(record.address || '').trim();
+    const email = String(record.email || '').trim();
+    const rawLandline = String(record.landline || '').trim();
 
     address = fixAddressOrdering(address);
 
@@ -595,6 +637,7 @@ const cleanAndValidate = (records) => {
 };
 
 
+
 // --- PDF Size Checking (PITFALL FIX) ---
 const checkPdfSize = async (filePath, fileName) => {
   try {
@@ -614,6 +657,7 @@ const checkPdfSize = async (filePath, fileName) => {
     throw error;
   }
 };
+
 
 
 // --- Graceful Shutdown Handler ---
@@ -636,7 +680,9 @@ const setupGracefulShutdown = async () => {
 };
 
 
+
 // --- MAIN PROCESSING FUNCTION (Backward Compatible) ---
+
 
 /**
  * Process PDFs with all optimizations + GCP safeguards
@@ -654,27 +700,27 @@ export const processPDFs = async (pdfFiles, batchSize = 10, maxWorkers = 4) => {
     setupGracefulShutdown();
   }
 
-   // ⭐ NEW LOGIC: Scale workers based on file count
-   let scaledWorkers = SAFE_MAX_WORKERS;
-   
-   if (pdfFiles.length === 1) {
-     scaledWorkers = 2;
-   } else if (pdfFiles.length === 2) {
-     scaledWorkers = 5;
-   } else if (pdfFiles.length <= 10) {
-     scaledWorkers = 5;
-   } else if (pdfFiles.length <= 30) {
-     scaledWorkers = pdfFiles.length;  // ⭐ NEW: Send ALL to Google immediately!
-   } else if (pdfFiles.length <= 100) {
-     scaledWorkers = 50;  // ⭐ For 100 files, use 50 workers
-   } else {
-     scaledWorkers = 75;  // ⭐ For 100+ files, use 75 workers
-   }
- 
-   console.log(`📊 Processing ${pdfFiles.length} files | Workers: ${scaledWorkers} | Pool: ${workerThreadPool ? WORKER_THREAD_POOL_SIZE : 0} threads`);
-   const limit = pLimit(scaledWorkers);  // ⭐ Use dynamic concurrency
-   const startTime = Date.now();
-   
+  // ⭐ NEW LOGIC: Scale workers based on file count
+  let scaledWorkers = SAFE_MAX_WORKERS;
+  
+  if (pdfFiles.length === 1) {
+    scaledWorkers = 2;
+  } else if (pdfFiles.length === 2) {
+    scaledWorkers = 5;
+  } else if (pdfFiles.length <= 10) {
+    scaledWorkers = 5;
+  } else if (pdfFiles.length <= 30) {
+    scaledWorkers = pdfFiles.length;  // ⭐ Send ALL to Google immediately!
+  } else if (pdfFiles.length <= 100) {
+    scaledWorkers = 50;  // ⭐ For 100 files, use 50 workers
+  } else {
+    scaledWorkers = 75;  // ⭐ For 100+ files, use 75 workers
+  }
+
+  console.log(`📊 Processing ${pdfFiles.length} files | Workers: ${scaledWorkers} | Pool: ${workerThreadPool ? WORKER_THREAD_POOL_SIZE : 0} threads`);
+  const limit = pLimit(scaledWorkers);  // ⭐ Use dynamic concurrency
+  const startTime = Date.now();
+  
   try {
     const tempDir = path.join(process.cwd(), "temp");
     if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
@@ -791,11 +837,13 @@ export const processPDFs = async (pdfFiles, batchSize = 10, maxWorkers = 4) => {
 };
 
 
+
 // --- Cleanup on module unload ---
 process.on('exit', async () => {
   if (workerThreadPool) {
     await workerThreadPool.terminate();
   }
 });
+
 
 // export { batchInsertRecords };
