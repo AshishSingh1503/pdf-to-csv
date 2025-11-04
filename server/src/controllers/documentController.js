@@ -59,125 +59,115 @@ export const processDocuments = async (req, res) => {
 // FIXED VERSION: Parallel Processing
 // ============================================
 const processPDFFilesParallel = async (fileArray, collectionId, fileMetadatas) => {
-  try {
-    // Create session directory once for all files
-    const sessionDir = path.join(process.cwd(), "output", `session_${Date.now()}`);
-    fs.mkdirSync(sessionDir, { recursive: true });
+  const BATCH_SIZE = 25;  // Process 25 files at a time
+  
+  console.log(`📊 Starting batch processing: ${fileArray.length} files in batches of ${BATCH_SIZE}`);
 
-    console.log(`📊 Starting parallel processing for ${fileArray.length} files...`);
-
-    // OPTIMIZATION: Process ALL files at once (not one by one)
-    const { allRawRecords, allFilteredRecords, allPreProcessingJson, allPostProcessingJson } = 
-      await processPDFs(fileArray, 10, 4);
-
-    const processingTimestamp = new Date().toISOString();
-
-    // ============================================
-    // STEP 1: Prepare all records for both tables
-    // ============================================
-    const preProcessRecords = allRawRecords.map((record, idx) => ({
-      collection_id: parseInt(collectionId),
-      ...record,
-      processing_timestamp: processingTimestamp
-    }));
-
-    const postProcessRecords = allFilteredRecords.map((record, idx) => ({
-      collection_id: parseInt(collectionId),
-      ...record,
-      processing_timestamp: processingTimestamp
-    }));
-
-    console.log(`📦 Prepared: ${preProcessRecords.length} pre-process records, ${postProcessRecords.length} post-process records`);
-
-    // ============================================
-    // STEP 2: Insert all records in PARALLEL
-    // ============================================
-    const [insertedPre, insertedPost] = await Promise.all([
-      PreProcessRecord.bulkCreate(preProcessRecords),
-      PostProcessRecord.bulkCreate(postProcessRecords),
-    ]);
-
-    console.log(`✅ Inserted: ${insertedPre.length} pre-process, ${insertedPost.length} post-process records`);
-
-    // ============================================
-    // STEP 3: Update file metadata status in PARALLEL
-    // ============================================
-    const updatePromises = fileMetadatas.map(async (metadata) => {
-      try {
-        return await metadata.updateStatus('completed');
-      } catch (err) {
-        console.error(`❌ Error updating status for file ${metadata.original_filename}:`, err);
-        return null;
-      }
-    });
-
-    const updatedMetadatas = await Promise.all(updatePromises);
-    console.log(`✅ Updated status for ${updatedMetadatas.filter(m => m).length} files`);
-
-    // ============================================
-    // STEP 4: Upload processed files to cloud in PARALLEL
-    // ============================================
-    const uploadPromises = fileArray.map(async (file, idx) => {
-      try {
-        const uploadedFiles = await CloudStorageService.uploadProcessedFiles([file], collectionId);
-        
-        // Update metadata with cloud storage path
-        if (fileMetadatas[idx] && uploadedFiles && uploadedFiles[0]) {
-          await fileMetadatas[idx].updateCloudStoragePath(uploadedFiles[0].url);
-        }
-        
-        return uploadedFiles;
-      } catch (err) {
-        console.error(`❌ Error uploading file ${file.name}:`, err);
-        return null;
-      }
-    });
-
-    const uploadResults = await Promise.all(uploadPromises);
-    console.log(`✅ Uploaded ${uploadResults.filter(r => r).length} files to cloud storage`);
-
-    // ============================================
-    // STEP 5: Broadcast completion events in PARALLEL
-    // ============================================
-    const broadcastPromises = fileMetadatas.map(async (metadata) => {
-      try {
-        broadcast({ 
-          type: 'FILES_PROCESSED', 
-          collectionId: metadata.collection_id, 
-          fileMetadata: metadata 
-        });
-        return true;
-      } catch (err) {
-        console.error(`❌ Error broadcasting for file ${metadata.original_filename}:`, err);
-        return false;
-      }
-    });
-
-    await Promise.all(broadcastPromises);
-    console.log(`✅ Broadcast complete events for all files`);
-
-    console.log(`🎉 All ${fileArray.length} files processed successfully in parallel!`);
-
-  } catch (error) {
-    console.error("🔥 Error in processPDFFilesParallel:", error);
+  // Process files in batches to avoid memory exhaustion
+  for (let batchStart = 0; batchStart < fileArray.length; batchStart += BATCH_SIZE) {
+    const batchEnd = Math.min(batchStart + BATCH_SIZE, fileArray.length);
+    const batch = fileArray.slice(batchStart, batchEnd);
+    const batchMetadatas = fileMetadatas.slice(batchStart, batchEnd);
     
-    // Mark all files as failed
-    const failurePromises = fileMetadatas.map(async (metadata) => {
-      try {
-        await metadata.updateStatus('failed');
+    console.log(`📦 Processing batch: files ${batchStart + 1}-${batchEnd} of ${fileArray.length}`);
+    const batchStartTime = Date.now();
+
+    try {
+      // Create session directory for this batch
+      const sessionDir = path.join(process.cwd(), "output", `session_${Date.now()}`);
+      fs.mkdirSync(sessionDir, { recursive: true });
+
+      // Process batch in parallel (but not all 30 at once)
+      const { allRawRecords, allFilteredRecords } = 
+        await processPDFs(batch, 10, 4);
+
+      const processingTimestamp = new Date().toISOString();
+
+      // Prepare records for both tables
+      const preProcessRecords = allRawRecords.map((record) => ({
+        collection_id: parseInt(collectionId),
+        ...record,
+        processing_timestamp: processingTimestamp
+      }));
+
+      const postProcessRecords = allFilteredRecords.map((record) => ({
+        collection_id: parseInt(collectionId),
+        ...record,
+        processing_timestamp: processingTimestamp
+      }));
+
+      // Insert all records in parallel (both tables)
+      const [insertedPre, insertedPost] = await Promise.all([
+        PreProcessRecord.bulkCreate(preProcessRecords),
+        PostProcessRecord.bulkCreate(postProcessRecords),
+      ]);
+
+      // Update file metadata status in parallel
+      const updatePromises = batchMetadatas.map(async (metadata) => {
+        try {
+          return await metadata.updateStatus('completed');
+        } catch (err) {
+          console.error(`❌ Error updating status:`, err);
+          return null;
+        }
+      });
+      await Promise.all(updatePromises);
+
+      // Upload files to cloud in parallel
+      const uploadPromises = batch.map(async (file, idx) => {
+        try {
+          const uploadedFiles = await CloudStorageService.uploadProcessedFiles([file], collectionId);
+          if (batchMetadatas[idx] && uploadedFiles && uploadedFiles) {
+            await batchMetadatas[idx].updateCloudStoragePath(uploadedFiles.url);
+          }
+          return uploadedFiles;
+        } catch (err) {
+          console.error(`❌ Error uploading file ${file.name}:`, err);
+          return null;
+        }
+      });
+      await Promise.all(uploadPromises);
+
+      // Broadcast completion
+      const broadcastPromises = batchMetadatas.map(async (metadata) => {
         broadcast({ 
           type: 'FILES_PROCESSED', 
           collectionId: metadata.collection_id, 
           fileMetadata: metadata 
         });
-      } catch (err) {
-        console.error(`❌ Error updating failed status:`, err);
-      }
-    });
+      });
+      await Promise.all(broadcastPromises);
 
-    await Promise.all(failurePromises);
+      const batchTime = ((Date.now() - batchStartTime) / 1000).toFixed(2);
+      const memoryUsage = Math.round(process.memoryUsage().heapUsed / 1024 / 1024);
+      console.log(`✅ Batch complete: ${batchTime}s | Memory: ${memoryUsage}MB | Files: ${batchEnd - batchStart}`);
+
+    } catch (error) {
+      console.error(`🔥 Error processing batch ${batchStart + 1}-${batchEnd}:`, error);
+      
+      // Mark all files in batch as failed
+      const failurePromises = batchMetadatas.map(async (metadata) => {
+        try {
+          await metadata.updateStatus('failed');
+          broadcast({ 
+            type: 'FILES_PROCESSED', 
+            collectionId: metadata.collection_id, 
+            fileMetadata: metadata 
+          });
+        } catch (err) {
+          console.error(`❌ Error updating failed status:`, err);
+        }
+      });
+      await Promise.all(failurePromises);
+      
+      // Don't continue to next batch if current fails
+      throw error;
+    }
   }
+
+  console.log(`🎉 All batches processed successfully!`);
 };
+
 
 // Keep old sequential version as backup (not used)
 const processPDFFilesSequential = async (fileArray, collectionId, fileMetadatas) => {

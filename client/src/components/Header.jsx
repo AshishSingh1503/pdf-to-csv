@@ -6,7 +6,7 @@ const Header = ({ customer, onUploadClick, selectedCollection, onCollectionChang
     <div className="bg-white p-4 border-b border-gray-200">
       <div className="flex justify-between items-center mb-4">
         <h1 className="text-xl font-semibold">Document Processor</h1>
-        <div className="flex items-center space-x-2">
+        <div className="flex items-center space-x-4">
           {customer && (
             <select className="border rounded px-2 py-1">
               <option>{customer.name}</option>
@@ -19,12 +19,12 @@ const Header = ({ customer, onUploadClick, selectedCollection, onCollectionChang
             Uploaded Document
           </button>
           <button
-            className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 disabled:opacity-50"
+            className="bg-blue-600 text-white px-6 py-2 mx-3 rounded hover:bg-blue-700 disabled:opacity-50"
             onClick={onUploadClick}
             disabled={false}
             title="Upload PDFs"
           >
-            Upload PDFs (Max 25)
+            Upload PDFs
           </button>
         </div>
       </div>
