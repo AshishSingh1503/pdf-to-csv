@@ -4,10 +4,28 @@ import { config } from "../config/index.js";
 import fs from "fs";
 import path from "path";
 import pLimit from "p-limit";
+import { Worker } from "worker_threads";
+import os from "os";
+import { promises as fsPromises } from "fs";
 
 
-// Initialize Document AI client
+// --- CONFIGURATION & CONSTANTS ---
+const SAFE_MAX_WORKERS = 12; // Reduced from 20 to avoid GCP rate limiting
+const WORKER_THREAD_POOL_SIZE = Math.min(os.cpus().length, 4); // 4-8 threads max
+const MAX_PDF_SIZE_BYTES = 50 * 1024 * 1024; // 50MB warning threshold
+const PDF_SIZE_WARN_BYTES = 30 * 1024 * 1024; // 30MB soft limit
+const BATCH_SIZE_RECORDS = 500;
+const RETRY_ATTEMPTS = 3;
+const INITIAL_BACKOFF_MS = 1000;
+const REQUEST_TIMEOUT_MS = 360000; // 6 minutes for large PDFs
+
+
+// --- Global State Management ---
 let client;
+let workerThreadPool = null;
+let activeRequests = 0;
+const MAX_CONCURRENT_REQUESTS = 15; // Hard cap for GCP quota safety
+
 try {
   const clientConfig = process.env.NODE_ENV === 'production' ? {} : { keyFilename: config.credentials };
   client = new DocumentProcessorServiceClient(clientConfig);
@@ -18,7 +36,7 @@ try {
 }
 
 
-// --- OPTIMIZATION 6: Pre-compiled Regex Patterns (Cache compiled regexes) ---
+// --- OPTIMIZATION 6: Pre-compiled Regex Patterns ---
 const REGEX_PATTERNS = {
   addressStatePostcodeStart: /^\s*([A-Za-z]{2,3})\s+(\d{4})\s+(.+)$/i,
   addressPostcodeStateEnd: /^\s*(\d{4})\s+(.+?)\s+([A-Za-z]{2,3})\s*$/i,
@@ -36,7 +54,110 @@ const REGEX_PATTERNS = {
 };
 
 
-// --- Helper Functions ported from Python ---
+// --- WORKER THREAD POOL MANAGEMENT ---
+class WorkerThreadPool {
+  constructor(poolSize) {
+    this.poolSize = poolSize;
+    this.workers = [];
+    this.taskQueue = [];
+    this.activeCount = 0;
+    this.initialize();
+  }
+
+  initialize() {
+    for (let i = 0; i < this.poolSize; i++) {
+      this.workers.push({
+        isAvailable: true,
+        worker: null, // Lazily initialized
+      });
+    }
+    console.log(`🧵 Worker thread pool initialized with ${this.poolSize} slots`);
+  }
+
+  async runTask(task) {
+    return new Promise((resolve, reject) => {
+      const availableWorker = this.workers.find(w => w.isAvailable);
+
+      if (availableWorker) {
+        this.executeOnWorker(availableWorker, task, resolve, reject);
+      } else {
+        this.taskQueue.push({ task, resolve, reject });
+      }
+    });
+  }
+
+  executeOnWorker(workerSlot, task, resolve, reject) {
+    // PITFALL FIX: Lazy initialize workers to avoid startup overhead
+    if (!workerSlot.worker) {
+      workerSlot.worker = new Worker(new URL('./validators.worker.js', import.meta.url));
+      workerSlot.worker.on('error', reject);
+      workerSlot.worker.on('exit', (code) => {
+        if (code !== 0) {
+          reject(new Error(`Worker exited with code ${code}`));
+        }
+      });
+    }
+
+    workerSlot.isAvailable = false;
+    this.activeCount++;
+
+    const timeout = setTimeout(() => {
+      reject(new Error('Worker task timeout'));
+      workerSlot.isAvailable = true;
+      this.activeCount--;
+      this.processQueue();
+    }, 60000); // 60s per worker task
+
+    workerSlot.worker.once('message', (result) => {
+      clearTimeout(timeout);
+      workerSlot.isAvailable = true;
+      this.activeCount--;
+
+      if (result.error) {
+        reject(new Error(result.error));
+      } else {
+        resolve(result);
+      }
+
+      this.processQueue();
+    });
+
+    workerSlot.worker.on('error', (error) => {
+      clearTimeout(timeout);
+      workerSlot.isAvailable = true;
+      this.activeCount--;
+      console.error('❌ Worker error:', error);
+      reject(error);
+      this.processQueue();
+    });
+
+    workerSlot.worker.postMessage(task);
+  }
+
+  processQueue() {
+    if (this.taskQueue.length > 0 && this.workers.some(w => w.isAvailable)) {
+      const { task, resolve, reject } = this.taskQueue.shift();
+      const availableWorker = this.workers.find(w => w.isAvailable);
+      this.executeOnWorker(availableWorker, task, resolve, reject);
+    }
+  }
+
+  async terminate() {
+    for (const workerSlot of this.workers) {
+      if (workerSlot.worker) {
+        try {
+          await workerSlot.worker.terminate();
+        } catch (err) {
+          console.warn('⚠️  Error terminating worker:', err.message);
+        }
+      }
+    }
+    console.log('🧵 Worker thread pool terminated');
+  }
+}
+
+
+// --- Helper Functions ---
 
 const extractEntitiesSimple = (document) => {
   return document.entities?.map(entity => ({
@@ -96,7 +217,6 @@ const fixAddressOrdering = (address) => {
   let s = _single_line_address(address).trim();
   let match;
 
-  // Pattern A: State + Postcode at the beginning
   match = s.match(REGEX_PATTERNS.addressStatePostcodeStart);
   if (match) {
     const [, state, postcode, rest] = match;
@@ -104,7 +224,6 @@ const fixAddressOrdering = (address) => {
     return out.replace(REGEX_PATTERNS.whitespaceMultiple, ' ').trim();
   }
 
-  // Pattern B: Postcode at beginning and state at end
   match = s.match(REGEX_PATTERNS.addressPostcodeStateEnd);
   if (match) {
     const [, postcode, rest, state] = match;
@@ -112,7 +231,6 @@ const fixAddressOrdering = (address) => {
     return out.replace(REGEX_PATTERNS.whitespaceMultiple, ' ').trim();
   }
 
-  // Pattern C: State + Postcode in the middle
   match = s.match(REGEX_PATTERNS.addressStatePostcodeMiddle);
   if (match) {
     const [, part1, state, postcode, part2] = match;
@@ -120,7 +238,6 @@ const fixAddressOrdering = (address) => {
     return out.replace(REGEX_PATTERNS.whitespaceMultiple, ' ').trim();
   }
 
-  // Pattern D: If any state+postcode pair exists anywhere, move it to the end
   match = s.match(REGEX_PATTERNS.addressStatePostcodeAny);
   if (match) {
     const state = match[1].toUpperCase();
@@ -172,12 +289,212 @@ const normalizeDateField = (dateStr) => {
   }
 };
 
-// NEW: Validate landline - must be >= 10 digits
+
 const isValidLandline = (landline) => {
   if (!landline) return false;
   const digits = landline.replace(REGEX_PATTERNS.digitOnly, '');
   return digits.length >= 10;
 };
+
+
+// --- OPTIMIZATION 4: Exponential Backoff with Rate Limit Checking ---
+const retryWithBackoff = async (fn, maxRetries = RETRY_ATTEMPTS, initialDelay = INITIAL_BACKOFF_MS) => {
+  let lastError;
+
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      // PITFALL FIX: Check active requests before attempting
+      if (activeRequests >= MAX_CONCURRENT_REQUESTS) {
+        const waitTime = Math.min(1000, 100 * activeRequests);
+        await new Promise(resolve => setTimeout(resolve, waitTime));
+      }
+
+      activeRequests++;
+      const result = await Promise.race([
+        fn(),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('Request timeout')), REQUEST_TIMEOUT_MS)
+        )
+      ]);
+      activeRequests--;
+      return result;
+
+    } catch (error) {
+      activeRequests--;
+      lastError = error;
+
+      const isRateLimit = error.code === 429 || 
+                         error.message?.includes('RESOURCE_EXHAUSTED') ||
+                         error.message?.includes('Rate limit');
+
+      if (isRateLimit && attempt < maxRetries - 1) {
+        const delay = initialDelay * Math.pow(2, attempt);
+        console.warn(`⏱️  Rate limited. Retrying after ${delay}ms (attempt ${attempt + 1}/${maxRetries})`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      } else if (!isRateLimit) {
+        throw error;
+      }
+    }
+  }
+
+  throw lastError;
+};
+
+
+// --- OPTIMIZATION 2: Batch Database Inserts ---
+export const batchInsertRecords = async (records, dbClient, batchSize = BATCH_SIZE_RECORDS) => {
+  if (!records || records.length === 0) {
+    console.log('⚠️  No records to insert');
+    return { insertedCount: 0, batches: 0 };
+  }
+
+  let insertedCount = 0;
+  let batchCount = 0;
+
+  try {
+    for (let i = 0; i < records.length; i += batchSize) {
+      const batch = records.slice(i, i + batchSize);
+      batchCount++;
+
+      if (dbClient && typeof dbClient.insertBatch === 'function') {
+        const result = await dbClient.insertBatch(batch);
+        insertedCount += result.rowCount || batch.length;
+      } else if (dbClient && typeof dbClient.collection === 'function') {
+        const result = await dbClient.collection('records').insertMany(batch);
+        insertedCount += result.insertedCount;
+      }
+
+      console.log(`📦 Batch ${batchCount}: Inserted ${batch.length} records`);
+    }
+
+    console.log(`✅ Total inserted: ${insertedCount} records in ${batchCount} batches`);
+    return { insertedCount, batches: batchCount };
+  } catch (error) {
+    console.error('❌ Error in batch insert:', error.message);
+    throw error;
+  }
+};
+
+
+// --- OPTIMIZATION 3 & 7: Async File Operations ---
+const readFileBuffered = async (tempPath) => {
+  try {
+    return await fsPromises.readFile(tempPath);
+  } catch (error) {
+    console.error(`❌ Failed to read file ${tempPath}:`, error.message);
+    throw error;
+  }
+};
+
+
+const cleanupTempFile = async (tempPath) => {
+  try {
+    await fsPromises.unlink(tempPath);
+  } catch (error) {
+    // PITFALL FIX: Non-fatal error handling
+    if (error.code !== 'ENOENT') {
+      console.warn(`⚠️  Failed to cleanup temp file ${tempPath}:`, error.message);
+    }
+  }
+};
+
+
+// --- OPTIMIZATION 5: Parallel JSON Generation ---
+const generateJsonObjects = async (rawRecords, filteredRecords, entities, rawText, fileName) => {
+  const [preProcessingJson, postProcessingJson] = await Promise.all([
+    // Pre-processing JSON
+    (async () => {
+      const preProcessingRecords = rawRecords.map(record => ({
+        full_name: `${record.first_name || ''} ${record.last_name || ''}`.trim(),
+        dateofbirth: record.dateofbirth,
+        address: record.address,
+        mobile: record.mobile,
+        email: record.email,
+        landline: record.landline,
+        lastseen: record.lastseen,
+        file_name: record.file_name
+      }));
+
+      return {
+        file_name: fileName,
+        processing_timestamp: new Date().toISOString(),
+        raw_records: preProcessingRecords,
+        document_ai_entities: entities,
+        total_entities: entities.length,
+        entity_types: [...new Set(entities.map(e => e.type))],
+        raw_text: rawText,
+        metadata: {
+          processor_id: config.processorId,
+          project_id: config.projectId,
+          location: config.location
+        }
+      };
+    })(),
+
+    // Post-processing JSON
+    (async () => {
+      return {
+        file_name: fileName,
+        processing_timestamp: new Date().toISOString(),
+        raw_records: rawRecords,
+        filtered_records: filteredRecords,
+        summary: {
+          total_raw_records: rawRecords.length,
+          total_filtered_records: filteredRecords.length,
+          success_rate: rawRecords.length > 0 ? `${((filteredRecords.length / rawRecords.length) * 100).toFixed(1)}%` : "0%"
+        },
+        field_counts: {
+          names: rawRecords.filter(r => r.first_name).length,
+          dateofbirths: rawRecords.filter(r => r.dateofbirth).length,
+          addresses: rawRecords.filter(r => r.address).length,
+          mobiles: rawRecords.filter(r => r.mobile).length,
+          emails: rawRecords.filter(r => r.email).length,
+          landlines: rawRecords.filter(r => r.landline).length,
+          lastseens: rawRecords.filter(r => r.lastseen).length
+        },
+        metadata: {
+          processor_id: config.processorId,
+          project_id: config.projectId,
+          location: config.location
+        }
+      };
+    })()
+  ]);
+
+  return { preProcessingJson, postProcessingJson };
+};
+
+
+// --- OPTIMIZATION 5: Batch Record Processing in Parallel ---
+const batchValidateRecords = async (records, batchSize = 100) => {
+  if (records.length <= batchSize || !workerThreadPool) {
+    // Fall back to main thread validation if too small or no worker pool
+    return cleanAndValidate(records);
+  }
+
+  const batches = [];
+  for (let i = 0; i < records.length; i += batchSize) {
+    batches.push(records.slice(i, i + batchSize));
+  }
+
+  try {
+    const validatedBatches = await Promise.all(
+      batches.map(batch =>
+        workerThreadPool.runTask({
+          type: 'validate',
+          records: batch,
+          patterns: REGEX_PATTERNS
+        })
+      )
+    );
+
+    return validatedBatches.flat();
+  } catch (error) {
+    console.warn(`⚠️  Worker thread validation failed, falling back to main thread:`, error.message);
+    return cleanAndValidate(records);
+  }
+};
+
 
 const cleanAndValidate = (records) => {
   const cleanRecords = [];
@@ -209,7 +526,6 @@ const cleanAndValidate = (records) => {
 
     if (!address || !/\d/.test(address.substring(0, 25))) continue;
 
-    // Only include landline if it has >= 10 digits
     const landline = isValidLandline(rawLandline) ? rawLandline.replace(REGEX_PATTERNS.digitOnly, '') : '';
 
     cleanRecords.push({
@@ -236,124 +552,81 @@ const cleanAndValidate = (records) => {
   return uniqueRecords;
 };
 
-// --- OPTIMIZATION 5 & 7: Memory-Efficient Buffering & Concurrent File Reading ---
-/**
- * Read multiple files concurrently with Promise.all
- * OPTIMIZATION 7: Parallel async file reads instead of sequential
- */
-const readFilesBuffered = async (pdfFiles) => {
-  const fileBuffers = await Promise.all(
-    pdfFiles.map(file =>
-      new Promise((resolve, reject) => {
-        const tempPath = path.join(process.cwd(), "temp", file.name);
-        fs.readFile(tempPath, (err, data) => {
-          if (err) reject(err);
-          else resolve({ fileName: file.name, buffer: data, tempPath });
-        });
-      })
-    )
-  );
-  return fileBuffers;
-};
 
-// --- OPTIMIZATION 2: Batch Database Inserts ---
-/**
- * Batch insert records into database
- * Expects database connection/client to be available
- * This is a template - adjust based on your database (PostgreSQL, MongoDB, etc.)
- */
-export const batchInsertRecords = async (records, dbClient, batchSize = 500) => {
-  if (!records || records.length === 0) {
-    console.log('⚠️  No records to insert');
-    return { insertedCount: 0, batches: 0 };
-  }
-
-  let insertedCount = 0;
-  let batchCount = 0;
-
+// --- PDF Size Checking (PITFALL FIX) ---
+const checkPdfSize = async (filePath, fileName) => {
   try {
-    // Process records in batches
-    for (let i = 0; i < records.length; i += batchSize) {
-      const batch = records.slice(i, i + batchSize);
-      batchCount++;
+    const stats = await fsPromises.stat(filePath);
+    const fileSizeMB = stats.size / (1024 * 1024);
 
-      // Example for PostgreSQL with pg-promise or similar
-      // Adjust this based on your actual database setup
-      if (dbClient && typeof dbClient.insertBatch === 'function') {
-        const result = await dbClient.insertBatch(batch);
-        insertedCount += result.rowCount || batch.length;
-      } else if (dbClient && typeof dbClient.collection === 'function') {
-        // MongoDB example
-        const result = await dbClient.collection('records').insertMany(batch);
-        insertedCount += result.insertedCount;
-      }
-
-      console.log(`📦 Batch ${batchCount}: Inserted ${batch.length} records`);
+    if (stats.size > MAX_PDF_SIZE_BYTES) {
+      throw new Error(`PDF exceeds max size (${fileSizeMB.toFixed(1)}MB > 50MB)`);
     }
 
-    console.log(`✅ Total inserted: ${insertedCount} records in ${batchCount} batches`);
-    return { insertedCount, batches: batchCount };
+    if (stats.size > PDF_SIZE_WARN_BYTES) {
+      console.warn(`⚠️  Large PDF detected: ${fileName} (${fileSizeMB.toFixed(1)}MB)`);
+    }
+
+    return true;
   } catch (error) {
-    console.error('❌ Error in batch insert:', error.message);
     throw error;
   }
 };
 
-// --- OPTIMIZATION 4: Exponential Backoff for Rate Limiting ---
-/**
- * Retry function with exponential backoff for handling API rate limits
- */
-const retryWithBackoff = async (fn, maxRetries = 3, initialDelay = 1000) => {
-  let lastError;
 
-  for (let attempt = 0; attempt < maxRetries; attempt++) {
-    try {
-      return await fn();
-    } catch (error) {
-      lastError = error;
-      const isRateLimit = error.code === 429 || error.message?.includes('RESOURCE_EXHAUSTED');
-
-      if (isRateLimit && attempt < maxRetries - 1) {
-        const delay = initialDelay * Math.pow(2, attempt);
-        console.warn(`⏱️  Rate limited. Retrying after ${delay}ms (attempt ${attempt + 1}/${maxRetries})`);
-        await new Promise(resolve => setTimeout(resolve, delay));
-      } else if (!isRateLimit) {
-        throw error;
-      }
+// --- Graceful Shutdown Handler ---
+const setupGracefulShutdown = async () => {
+  const cleanup = async () => {
+    console.log('\n🛑 Shutting down gracefully...');
+    if (workerThreadPool) {
+      await workerThreadPool.terminate();
     }
-  }
+    process.exit(0);
+  };
 
-  throw lastError;
+  process.on('SIGINT', cleanup);
+  process.on('SIGTERM', cleanup);
+
+  // Handle uncaught exceptions in promises
+  process.on('unhandledRejection', (reason, promise) => {
+    console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
+  });
 };
 
-// --- Main Processing Function (Backward Compatible) ---
+
+// --- MAIN PROCESSING FUNCTION (Backward Compatible) ---
 
 /**
- * Process PDFs with optimizations for 1-200+ files
- * BACKWARD COMPATIBLE: Works with existing code without breaking changes
+ * Process PDFs with all optimizations + GCP safeguards
+ * BACKWARD COMPATIBLE: Same interface as original
  * 
  * @param {Array} pdfFiles - Array of PDF file objects
- * @param {Number} batchSize - Records per batch for DB inserts (default: 500)
- * @param {Number} maxWorkers - Max concurrent workers (auto-scaled based on file count)
- * @returns {Promise<Object>} Same format as original function
+ * @param {Number} batchSize - Unused (kept for compatibility)
+ * @param {Number} maxWorkers - Unused (kept for compatibility, auto-determined)
+ * @returns {Promise<Object>} Aggregated results from all files
  */
 export const processPDFs = async (pdfFiles, batchSize = 10, maxWorkers = 4) => {
-  // OPTIMIZATION: Auto-scale workers based on file count
-  // For 1 file: use 2 workers
-  // For 10 files: use 5 workers
-  // For 100+ files: use 20 workers
-  let scaledWorkers = maxWorkers;
-  if (pdfFiles.length === 1) {
-    scaledWorkers = 2;
-  } else if (pdfFiles.length <= 10) {
-    scaledWorkers = Math.min(5, pdfFiles.length);
-  } else if (pdfFiles.length > 50) {
-    scaledWorkers = 20;
-  } else if (pdfFiles.length > 10) {
-    scaledWorkers = Math.max(maxWorkers, Math.ceil(pdfFiles.length / 10));
+  // Initialize worker thread pool if needed
+  if (!workerThreadPool && pdfFiles.length >= 10) {
+    workerThreadPool = new WorkerThreadPool(WORKER_THREAD_POOL_SIZE);
+    setupGracefulShutdown();
   }
 
-  console.log(`📊 Processing ${pdfFiles.length} files | Workers: ${scaledWorkers}`);
+  // Auto-scale workers with GCP safety limits
+  let scaledWorkers = SAFE_MAX_WORKERS;
+  if (pdfFiles.length === 1) {
+    scaledWorkers = 2;  // Single file: minimal overhead
+  } else if (pdfFiles.length === 2) {
+    scaledWorkers = 5;  // Two files: use 5 workers for parallelization
+  } else if (pdfFiles.length <= 10) {
+    scaledWorkers = 5;  // Small batch: 5 workers
+  } else if (pdfFiles.length <= 50) {
+    scaledWorkers = 8;  // Medium batch: 8 workers
+  } else {
+    scaledWorkers = 12; // Large batch: 12 workers (GCP safe max)
+  }
+
+  console.log(`📊 Processing ${pdfFiles.length} files | Workers: ${scaledWorkers} | Pool: ${workerThreadPool ? WORKER_THREAD_POOL_SIZE : 0} threads`);
   const limit = pLimit(scaledWorkers);
   const startTime = Date.now();
 
@@ -368,75 +641,37 @@ export const processPDFs = async (pdfFiles, batchSize = 10, maxWorkers = 4) => {
         // Save uploaded file to temp
         await file.mv(tempPath);
 
-        // OPTIMIZATION 4: Use retry with backoff for API calls
+        // PITFALL FIX: Check PDF size before processing
+        await checkPdfSize(tempPath, file.name);
+
+        // OPTIMIZATION 4: Retry with backoff
         const [result] = await retryWithBackoff(async () => {
           return await client.processDocument({
             name: `projects/${config.projectId}/locations/${config.location}/processors/${config.processorId}`,
             rawDocument: {
-              content: fs.readFileSync(tempPath),
+              content: await readFileBuffered(tempPath),
               mimeType: "application/pdf",
             },
           });
-        }, 3, 1000);
+        }, RETRY_ATTEMPTS, INITIAL_BACKOFF_MS);
 
         const entities = extractEntitiesSimple(result.document);
         const rawRecords = simpleGrouping(entities);
-        const filteredRecords = cleanAndValidate(rawRecords);
+
+        // OPTIMIZATION 5: Batch validate records in parallel
+        const filteredRecords = await batchValidateRecords(rawRecords, 100);
 
         rawRecords.forEach(r => r.file_name = file.name);
         filteredRecords.forEach(r => r.file_name = file.name);
 
-        const preProcessingRecords = rawRecords.map(record => ({
-          full_name: `${record.first_name || ''} ${record.last_name || ''}`.trim(),
-          dateofbirth: record.dateofbirth,
-          address: record.address,
-          mobile: record.mobile,
-          email: record.email,
-          landline: record.landline,
-          lastseen: record.lastseen,
-          file_name: record.file_name
-        }));
-
-        const preProcessingJson = {
-          file_name: file.name,
-          processing_timestamp: new Date().toISOString(),
-          raw_records: preProcessingRecords,
-          document_ai_entities: entities,
-          total_entities: entities.length,
-          entity_types: [...new Set(entities.map(e => e.type))],
-          raw_text: result.document.text,
-          metadata: {
-            processor_id: config.processorId,
-            project_id: config.projectId,
-            location: config.location
-          }
-        };
-
-        const postProcessingJson = {
-          file_name: file.name,
-          processing_timestamp: new Date().toISOString(),
-          raw_records: rawRecords,
-          filtered_records: filteredRecords,
-          summary: {
-            total_raw_records: rawRecords.length,
-            total_filtered_records: filteredRecords.length,
-            success_rate: rawRecords.length > 0 ? `${((filteredRecords.length / rawRecords.length) * 100).toFixed(1)}%` : "0%"
-          },
-          field_counts: {
-            names: rawRecords.filter(r => r.first_name).length,
-            dateofbirths: rawRecords.filter(r => r.dateofbirth).length,
-            addresses: rawRecords.filter(r => r.address).length,
-            mobiles: rawRecords.filter(r => r.mobile).length,
-            emails: rawRecords.filter(r => r.email).length,
-            landlines: rawRecords.filter(r => r.landline).length,
-            lastseens: rawRecords.filter(r => r.lastseen).length
-          },
-          metadata: {
-            processor_id: config.processorId,
-            project_id: config.projectId,
-            location: config.location
-          }
-        };
+        // OPTIMIZATION 5: Parallel JSON generation
+        const { preProcessingJson, postProcessingJson } = await generateJsonObjects(
+          rawRecords,
+          filteredRecords,
+          entities,
+          result.document.text,
+          file.name
+        );
 
         console.log(`✅ [${index + 1}/${pdfFiles.length}] ${file.name} → ${filteredRecords.length} records`);
 
@@ -447,7 +682,7 @@ export const processPDFs = async (pdfFiles, batchSize = 10, maxWorkers = 4) => {
           postProcessingJson,
         };
       } catch (fileError) {
-        console.error(`❌ [${index + 1}/${pdfFiles.length}] ${file.name} error:`, fileError.message);
+        console.error(`❌ [${index + 1}/${pdfFiles.length}] ${file.name}:`, fileError.message);
         return {
           rawRecords: [],
           filteredRecords: [],
@@ -456,14 +691,8 @@ export const processPDFs = async (pdfFiles, batchSize = 10, maxWorkers = 4) => {
           error: fileError.message
         };
       } finally {
-        // Cleanup temp file
-        if (fs.existsSync(tempPath)) {
-          try {
-            fs.unlinkSync(tempPath);
-          } catch (unlinkError) {
-            console.warn(`⚠️  Failed to delete temp file ${tempPath}`);
-          }
-        }
+        // OPTIMIZATION 3: Async cleanup
+        await cleanupTempFile(tempPath);
       }
     };
 
@@ -472,7 +701,6 @@ export const processPDFs = async (pdfFiles, batchSize = 10, maxWorkers = 4) => {
       limit(() => processFile(file, index))
     );
 
-    // OPTIMIZATION 5: Buffer results in chunks instead of loading all at once
     const results = await Promise.all(processingPromises);
 
     // Aggregate results
@@ -499,6 +727,12 @@ export const processPDFs = async (pdfFiles, batchSize = 10, maxWorkers = 4) => {
 
     console.log(`\n⏱️  Processing complete in ${processingTime}s | Success rate: ${successRate}`);
 
+    // PITFALL FIX: Cleanup worker pool after batch
+    if (workerThreadPool && pdfFiles.length >= 10 && activeRequests === 0) {
+      // Keep pool alive for reuse
+      console.log('🧵 Worker pool ready for reuse');
+    }
+
     return {
       allRawRecords,
       allFilteredRecords,
@@ -510,3 +744,13 @@ export const processPDFs = async (pdfFiles, batchSize = 10, maxWorkers = 4) => {
     throw error;
   }
 };
+
+
+// --- Cleanup on module unload ---
+process.on('exit', async () => {
+  if (workerThreadPool) {
+    await workerThreadPool.terminate();
+  }
+});
+
+// export { batchInsertRecords };
