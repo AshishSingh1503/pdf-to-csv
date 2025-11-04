@@ -65,7 +65,6 @@ const UploadedFilesSidebar = ({ isOpen, onClose, selectedCollection }) => {
   };
 
   const handleDownload = (file) => {
-    // Implement download logic here
     window.open(file.cloud_storage_path, '_blank');
   };
 
@@ -94,10 +93,11 @@ const UploadedFilesSidebar = ({ isOpen, onClose, selectedCollection }) => {
           </svg>
         </button>
       </div>
+
       {loading ? (
         <p>Loading files...</p>
       ) : (
-        <div className="space-y-4">
+        <div className="space-y-4 pb-20"> {/* added bottom padding so floating button doesn’t overlap */}
           {files.map((file) => (
             <div key={file.id} className="border rounded-lg p-4 bg-gray-50">
               <div className="flex justify-between items-center">
@@ -108,14 +108,14 @@ const UploadedFilesSidebar = ({ isOpen, onClose, selectedCollection }) => {
                   </p>
                 </div>
                 <div className="flex items-center space-x-2">
-                  <button onClick={() => handleDownload(file)} title="Download" className="text-gray-500 hover:text-gray-700">
+                  {/* <button onClick={() => handleDownload(file)} title="Download" className="text-gray-500 hover:text-gray-700">
                     📄
                   </button>
                   {file.processing_status === 'failed' && (
                     <button onClick={() => handleReprocess(file.id)} title="Reprocess" className="text-gray-500 hover:text-gray-700">
                       🔄
                     </button>
-                  )}
+                  )} */}
                   <span
                     className={`px-2 py-1 text-xs font-semibold rounded-full ${
                       file.processing_status === 'completed'
@@ -138,11 +138,14 @@ const UploadedFilesSidebar = ({ isOpen, onClose, selectedCollection }) => {
           ))}
         </div>
       )}
-      <div className="absolute bottom-4 right-4">
-        <button onClick={onClose} className="bg-gray-800 text-white px-4 py-2 rounded-lg hover:bg-gray-900">
-          Close
-        </button>
-      </div>
+
+      {/* ✅ Floating Close Button — fixed properly */}
+      <button
+        onClick={onClose}
+        className="fixed bottom-6 right-6 bg-gray-800 text-white px-4 py-2 rounded-lg shadow-lg hover:bg-gray-900 transition-all z-50"
+      >
+        Close
+      </button>
     </div>
   );
 };

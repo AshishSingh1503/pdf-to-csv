@@ -46,9 +46,11 @@ gcloud run deploy pdf2csv-backend \
   --cpu=2 \
   --timeout=300
 
-# 6. Get backend URL
+# 6. Get backend URL and derive WS_URL
 BACKEND_URL=$(gcloud run services describe pdf2csv-backend --platform managed --region $REGION --format 'value(status.url)')
+WS_URL=$(echo $BACKEND_URL | sed 's|https://|wss://|g')
 echo "✅ Backend deployed at: $BACKEND_URL"
+echo "✅ WebSocket URL configured at: $WS_URL"
 
 # 7. Deploy frontend to Cloud Run
 echo "🚀 Deploying frontend to Cloud Run..."
@@ -58,7 +60,7 @@ gcloud run deploy pdf2csv-frontend \
   --platform managed \
   --region $REGION \
   --allow-unauthenticated \
-  --set-env-vars="VITE_API_URL=$BACKEND_URL" \
+  --set-env-vars="VITE_API_URL=$BACKEND_URL,VITE_WS_URL=$WS_URL" \
   --memory=1Gi \
   --cpu=1
 

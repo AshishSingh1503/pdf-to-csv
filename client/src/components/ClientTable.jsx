@@ -140,10 +140,10 @@ const ClientTable = ({ data, isPostProcess, sortField, sortDirection, onSort }) 
               ) : (
                 <td className="py-2 px-4 border-b">{client.full_name || ''}</td>
               )}
+              <td className="py-2 px-4 border-b">{client.dob || ''}</td>
+              <td className="py-2 px-4 border-b">{client.address || ''}</td>
               <td className="py-2 px-4 border-b">{client.mobile || ''}</td>
               <td className="py-2 px-4 border-b">{client.email || ''}</td>
-              <td className="py-2 px-4 border-b">{client.address || ''}</td>
-              <td className="py-2 px-4 border-b">{client.dob || ''}</td>
               <td className="py-2 px-4 border-b">{client.seen || ''}</td>
               <td className="py-2 px-4 border-b">{client.source || ''}</td>
             </tr>
