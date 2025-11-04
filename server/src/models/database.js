@@ -9,7 +9,11 @@ const pool = new Pool({
   database: process.env.DB_NAME || 'pdf2csv_db',
   user: process.env.DB_USER || 'postgres',
   password: process.env.DB_PASSWORD || 'postgres',
-  ssl: process.env.DB_HOST?.includes('/cloudsql/') ? false : (process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : false),
+  ssl: process.env.DB_HOST?.includes('/cloudsql/')
+    ? false
+    : process.env.DB_SSL === 'true'
+    ? { rejectUnauthorized: false }
+    : false,
   max: 200, // Maximum number of clients in the pool
   idleTimeoutMillis: 30000, // Close idle clients after 30 seconds
   connectionTimeoutMillis: 10000, // Increased timeout for Cloud SQL connection
@@ -53,7 +57,7 @@ export const initializeDatabase = async () => {
         id SERIAL PRIMARY KEY,
         name VARCHAR(255) NOT NULL,
         email VARCHAR(255),
-        phone VARCHAR(20),
+        phone VARCHAR(100), -- increased from 20 to 100
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
@@ -66,12 +70,12 @@ export const initializeDatabase = async () => {
         customer_id INTEGER REFERENCES customers(id) ON DELETE CASCADE,
         name VARCHAR(255) NOT NULL UNIQUE,
         description TEXT,
-        status VARCHAR(20) DEFAULT 'active',
+        status VARCHAR(100) DEFAULT 'active', -- increased from 20 to 100
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
     `);
-    
+
     // Add customer_id column to collections table if it doesn't exist
     await query(`
       ALTER TABLE collections
@@ -84,11 +88,11 @@ export const initializeDatabase = async () => {
         id SERIAL PRIMARY KEY,
         collection_id INTEGER REFERENCES collections(id) ON DELETE CASCADE,
         full_name VARCHAR(255),
-        mobile VARCHAR(20),
+        mobile VARCHAR(100), -- increased from 20 to 100
         email VARCHAR(255),
         address TEXT,
         dateofbirth VARCHAR(50),
-        landline VARCHAR(20),
+        landline VARCHAR(100), -- increased from 20 to 100
         lastseen VARCHAR(50),
         file_name VARCHAR(255),
         processing_timestamp TIMESTAMP,
@@ -103,11 +107,11 @@ export const initializeDatabase = async () => {
         collection_id INTEGER REFERENCES collections(id) ON DELETE CASCADE,
         first_name VARCHAR(255),
         last_name VARCHAR(255),
-        mobile VARCHAR(20),
+        mobile VARCHAR(100), -- increased from 20 to 100
         email VARCHAR(255),
         address TEXT,
         dateofbirth VARCHAR(50),
-        landline VARCHAR(20),
+        landline VARCHAR(100), -- increased from 20 to 100
         lastseen VARCHAR(50),
         file_name VARCHAR(255),
         processing_timestamp TIMESTAMP,
@@ -123,7 +127,7 @@ export const initializeDatabase = async () => {
         original_filename VARCHAR(255),
         cloud_storage_path VARCHAR(500),
         file_size BIGINT,
-        processing_status VARCHAR(20) DEFAULT 'processing',
+        processing_status VARCHAR(100) DEFAULT 'processing', -- increased from 20 to 100
         upload_progress INTEGER DEFAULT 0,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
@@ -134,6 +138,15 @@ export const initializeDatabase = async () => {
       ALTER TABLE file_metadata
       ADD COLUMN IF NOT EXISTS upload_progress INTEGER DEFAULT 0
     `);
+
+    // ✅ Ensure existing columns have correct sizes
+    await query(`ALTER TABLE customers ALTER COLUMN phone TYPE VARCHAR(100);`);
+    await query(`ALTER TABLE collections ALTER COLUMN status TYPE VARCHAR(100);`);
+    await query(`ALTER TABLE pre_process_records ALTER COLUMN mobile TYPE VARCHAR(100);`);
+    await query(`ALTER TABLE pre_process_records ALTER COLUMN landline TYPE VARCHAR(100);`);
+    await query(`ALTER TABLE post_process_records ALTER COLUMN mobile TYPE VARCHAR(100);`);
+    await query(`ALTER TABLE post_process_records ALTER COLUMN landline TYPE VARCHAR(100);`);
+    await query(`ALTER TABLE file_metadata ALTER COLUMN processing_status TYPE VARCHAR(100);`);
 
     // Create indexes for performance
     await query(`
@@ -152,7 +165,7 @@ export const initializeDatabase = async () => {
       CREATE INDEX IF NOT EXISTS idx_file_collection_id ON file_metadata(collection_id)
     `);
 
-    console.log('✅ Database tables initialized successfully');
+    console.log('✅ Database tables initialized and verified successfully');
   } catch (error) {
     console.error('❌ Error initializing database:', error);
     throw error;

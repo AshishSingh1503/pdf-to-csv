@@ -24,50 +24,72 @@ const Home = () => {
   const [currentPage, setCurrentPage] = useState(1);
   const [isPostProcess, setIsPostProcess] = useState(true);
   const [sortField, setSortField] = useState(null);
-  const [sortDirection, setSortDirection] = useState('asc');
+  const [sortDirection, setSortDirection] = useState("asc");
   const [selectedCollection, setSelectedCollection] = useState(null);
-  const [searchTerm, setSearchTerm] = useState('');
+  const [searchTerm, setSearchTerm] = useState("");
   const [showCollectionsSidebar, setShowCollectionsSidebar] = useState(true);
   const [totalPages, setTotalPages] = useState(1);
   const itemsPerPage = 50;
   const [downloadLinks, setDownloadLinks] = useState(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
+  const [currentBatch, setCurrentBatch] = useState(0);
+  const [totalBatches, setTotalBatches] = useState(0);
 
+  // ✅ Batch Upload Logic
   const handleUpload = async (newFiles, collectionId) => {
     if (!newFiles.length) return;
 
     if (!collectionId) {
-      alert('Please select a collection before uploading files');
+      alert("Please select a collection before uploading files");
       return;
     }
 
     if (!customer && newFiles.length > 0) {
       const fileName = newFiles[0].name;
-      const customerName = fileName.split('_')[0].replace(/-/g, ' ');
+      const customerName = fileName.split("_")[0].replace(/-/g, " ");
       setCustomer({ name: customerName });
     }
 
+    const BATCH_SIZE = 25; // limit per upload batch
+    const fileChunks = [];
+    for (let i = 0; i < newFiles.length; i += BATCH_SIZE) {
+      fileChunks.push(newFiles.slice(i, i + BATCH_SIZE));
+    }
+
+    setTotalBatches(fileChunks.length);
     setLoading(true);
+    setUploadProgress(0);
+    setCurrentBatch(0);
 
     try {
-      const result = await uploadAndProcess(newFiles, collectionId, (progressEvent) => {
-        const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
-        setUploadProgress(percentCompleted);
-        if (percentCompleted === 100) {
-          setTimeout(() => {
-            setLoading(false);
-          }, 1000);
-        }
-      });
-      
+      for (let i = 0; i < fileChunks.length; i++) {
+        const batch = fileChunks[i];
+        setCurrentBatch(i + 1);
+        console.log(`Uploading batch ${i + 1}/${fileChunks.length}...`);
+
+        await uploadAndProcess(batch, collectionId, (progressEvent) => {
+          const percentCompleted = Math.round(
+            (progressEvent.loaded * 100) / progressEvent.total
+          );
+          setUploadProgress(percentCompleted);
+        });
+
+        // Optional pause between batches
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      }
+
       await fetchData();
-      
-      alert(`Successfully uploaded ${newFiles.length} file(s) and started processing.`);
+      alert(
+        `✅ Successfully uploaded ${newFiles.length} file(s) in ${fileChunks.length} batch(es).`
+      );
     } catch (error) {
-      console.error('Upload error:', error);
-      alert('Failed to process files. Please try again.');
+      console.error("Upload error:", error);
+      alert("❌ Failed to process some files. Please try again.");
+    } finally {
       setLoading(false);
+      setUploadProgress(0);
+      setCurrentBatch(0);
     }
   };
 
@@ -79,7 +101,7 @@ const Home = () => {
     const selectedFiles = [...e.target.files];
     if (selectedFiles.length > 0) {
       if (!selectedCollection) {
-        alert('Please select a collection before uploading files');
+        alert("Please select a collection before uploading files");
         return;
       }
       handleUpload(selectedFiles, selectedCollection.id);
@@ -90,33 +112,49 @@ const Home = () => {
     try {
       setLoading(true);
       const collectionId = selectedCollection ? selectedCollection.id : null;
-      
+
       let postProcessData = [];
       let preProcessData = [];
-      
+
       if (searchTerm) {
-        const searchResult = await dataApi.search(searchTerm, collectionId, 'both', currentPage, itemsPerPage);
+        const searchResult = await dataApi.search(
+          searchTerm,
+          collectionId,
+          "both",
+          currentPage,
+          itemsPerPage
+        );
         postProcessData = searchResult.data.postProcess || [];
         preProcessData = searchResult.data.preProcess || [];
         setTotalPages(searchResult.pagination.pages);
       } else {
         if (isPostProcess) {
-          const result = await dataApi.getPostProcess(collectionId, null, currentPage, itemsPerPage);
+          const result = await dataApi.getPostProcess(
+            collectionId,
+            null,
+            currentPage,
+            itemsPerPage
+          );
           postProcessData = result.data;
           setTotalPages(result.pagination.pages);
         } else {
-          const result = await dataApi.getPreProcess(collectionId, null, currentPage, itemsPerPage);
+          const result = await dataApi.getPreProcess(
+            collectionId,
+            null,
+            currentPage,
+            itemsPerPage
+          );
           preProcessData = result.data;
           setTotalPages(result.pagination.pages);
         }
       }
-      
+
       setData({
         postProcessResults: postProcessData || [],
-        preProcessResults: preProcessData || []
+        preProcessResults: preProcessData || [],
       });
     } catch (error) {
-      console.error('Error fetching data:', error);
+      console.error("Error fetching data:", error);
       setData({ postProcessResults: [], preProcessResults: [] });
     } finally {
       setLoading(false);
@@ -135,7 +173,7 @@ const Home = () => {
   const handleCollectionSelect = (collection) => {
     setSelectedCollection(collection);
     setCurrentPage(1);
-    setSearchTerm('');
+    setSearchTerm("");
   };
 
   const handleCustomerSelect = (customer) => {
@@ -156,72 +194,74 @@ const Home = () => {
     setIsPostProcess(!isPostProcess);
     setCurrentPage(1);
     setSortField(null);
-    setSortDirection('asc');
+    setSortDirection("asc");
   };
 
   const handleSort = (field) => {
     if (sortField === field) {
-      setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
+      setSortDirection(sortDirection === "asc" ? "desc" : "asc");
     } else {
       setSortField(field);
-      setSortDirection('asc');
+      setSortDirection("asc");
     }
     setCurrentPage(1);
   };
 
   const handleClearSort = () => {
     setSortField(null);
-    setSortDirection('asc');
+    setSortDirection("asc");
     setCurrentPage(1);
   };
 
   const getCurrentData = () => {
     if (!data) return [];
-    
-    let sourceData = isPostProcess ? (data.postProcessResults || []) : (data.preProcessResults || []);
-    
+
+    let sourceData = isPostProcess
+      ? data.postProcessResults || []
+      : data.preProcessResults || [];
+
     if (selectedPdf) {
-      sourceData = sourceData.filter(item => item.source === selectedPdf.name);
+      sourceData = sourceData.filter((item) => item.source === selectedPdf.name);
     }
-    
+
     if (sortField) {
       sourceData = [...sourceData].sort((a, b) => {
-        let aValue = a[sortField] || '';
-        let bValue = b[sortField] || '';
-        
-        if (sortField === 'dob' || sortField === 'lastseen') {
+        let aValue = a[sortField] || "";
+        let bValue = b[sortField] || "";
+
+        if (sortField === "dob" || sortField === "lastseen") {
           const aDate = new Date(aValue);
           const bDate = new Date(bValue);
           if (!isNaN(aDate.getTime()) && !isNaN(bDate.getTime())) {
             aValue = aDate;
             bValue = bDate;
           }
-        } else if (sortField === 'mobile') {
-          aValue = aValue.replace(/\D/g, '');
-          bValue = bValue.replace(/\D/g, '');
+        } else if (sortField === "mobile") {
+          aValue = aValue.replace(/\D/g, "");
+          bValue = bValue.replace(/\D/g, "");
         }
-        
-        if (isPostProcess && (sortField === 'first' || sortField === 'last')) {
-          aValue = a[sortField] || '';
-          bValue = b[sortField] || '';
-        } else if (!isPostProcess && sortField === 'full_name') {
-          aValue = a.full_name || '';
-          bValue = b.full_name || '';
+
+        if (isPostProcess && (sortField === "first" || sortField === "last")) {
+          aValue = a[sortField] || "";
+          bValue = b[sortField] || "";
+        } else if (!isPostProcess && sortField === "full_name") {
+          aValue = a.full_name || "";
+          bValue = b.full_name || "";
         }
-        
+
         aValue = String(aValue).toLowerCase();
         bValue = String(bValue).toLowerCase();
-        
+
         if (aValue < bValue) {
-          return sortDirection === 'asc' ? -1 : 1;
+          return sortDirection === "asc" ? -1 : 1;
         }
         if (aValue > bValue) {
-          return sortDirection === 'asc' ? 1 : -1;
+          return sortDirection === "asc" ? 1 : -1;
         }
         return 0;
       });
     }
-    
+
     return sourceData;
   };
 
@@ -238,16 +278,16 @@ const Home = () => {
           onRefresh={fetchData}
         />
       )}
-      
+
       <div className="flex-1 flex flex-col">
-        <Header 
-          customer={customer} 
+        <Header
+          customer={customer}
           onUploadClick={handleHeaderUploadClick}
           selectedCollection={selectedCollection}
           onCollectionChange={setSelectedCollection}
           onToggleSidebar={() => setIsSidebarOpen(!isSidebarOpen)}
         />
-        
+
         <main className="flex-1 overflow-y-auto">
           <div className="p-4">
             <input
@@ -267,9 +307,13 @@ const Home = () => {
 
             {selectedCollection && (
               <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
-                <h3 className="font-medium text-blue-900">{selectedCollection.name}</h3>
+                <h3 className="font-medium text-blue-900">
+                  {selectedCollection.name}
+                </h3>
                 {selectedCollection.description && (
-                  <p className="text-sm text-blue-700">{selectedCollection.description}</p>
+                  <p className="text-sm text-blue-700">
+                    {selectedCollection.description}
+                  </p>
                 )}
               </div>
             )}
@@ -278,43 +322,53 @@ const Home = () => {
 
             {loading && (
               <div className="mt-4">
-                <p className="text-gray-500">Uploading and processing files...</p>
+                <p className="text-gray-500">
+                  Uploading and processing files...{" "}
+                  {currentBatch > 0 &&
+                    ` (Batch ${currentBatch} of ${totalBatches})`}
+                </p>
                 <ProgressBar progress={uploadProgress} />
               </div>
             )}
 
             {data ? (
-             <ClientTable 
-               data={paginatedData} 
-               isPostProcess={isPostProcess}
-               sortField={sortField}
-               sortDirection={sortDirection}
-               onSort={handleSort}
-             />
-             
+              <ClientTable
+                data={paginatedData}
+                isPostProcess={isPostProcess}
+                sortField={sortField}
+                sortDirection={sortDirection}
+                onSort={handleSort}
+              />
             ) : (
               <p className="mt-4 text-gray-500">
-                {selectedCollection 
-                  ? `No data found in "${selectedCollection.name}" collection.` 
-                  : "Select a collection or upload PDFs to see the results."
-                }
+                {selectedCollection
+                  ? `No data found in "${selectedCollection.name}" collection.`
+                  : "Select a collection or upload PDFs to see the results."}
               </p>
             )}
           </div>
         </main>
-        
-        <Footer 
-          customer={customer} 
-          data={data} 
+
+        <Footer
+          customer={customer}
+          data={data}
           isPostProcess={isPostProcess}
           onToggleProcess={handleToggleProcess}
           sortField={sortField}
           onClearSort={handleClearSort}
           selectedCollection={selectedCollection}
         />
-        <Pagination currentPage={currentPage} totalPages={totalPages} onPageChange={handlePageChange} />
+        <Pagination
+          currentPage={currentPage}
+          totalPages={totalPages}
+          onPageChange={handlePageChange}
+        />
       </div>
-      <UploadedFilesSidebar isOpen={isSidebarOpen} onClose={() => setIsSidebarOpen(false)} selectedCollection={selectedCollection} />
+      <UploadedFilesSidebar
+        isOpen={isSidebarOpen}
+        onClose={() => setIsSidebarOpen(false)}
+        selectedCollection={selectedCollection}
+      />
     </div>
   );
 };
