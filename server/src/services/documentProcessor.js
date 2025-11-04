@@ -17,7 +17,7 @@ const PDF_SIZE_WARN_BYTES = 30 * 1024 * 1024; // 30MB soft limit
 const BATCH_SIZE_RECORDS = 500;
 const RETRY_ATTEMPTS = 3;
 const INITIAL_BACKOFF_MS = 1000;
-const REQUEST_TIMEOUT_MS = 360000; // 6 minutes for large PDFs
+const REQUEST_TIMEOUT_MS = 600000; // 10 minutes for large PDFs
 
 
 // --- Global State Management ---

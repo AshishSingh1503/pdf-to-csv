@@ -10,7 +10,7 @@ const pool = new Pool({
   user: process.env.DB_USER || 'postgres',
   password: process.env.DB_PASSWORD || 'postgres',
   ssl: process.env.DB_HOST?.includes('/cloudsql/') ? false : (process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : false),
-  max: 20, // Maximum number of clients in the pool
+  max: 50, // Maximum number of clients in the pool
   idleTimeoutMillis: 30000, // Close idle clients after 30 seconds
   connectionTimeoutMillis: 10000, // Increased timeout for Cloud SQL connection
 });
