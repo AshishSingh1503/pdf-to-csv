@@ -166,6 +166,46 @@ const extractEntitiesSimple = (document) => {
   })) || [];
 };
 
+// --- OPTIMIZATION 8: Improved Name Parsing ---
+const parseFullName = (fullName) => {
+  if (!fullName) return { first: '', last: '' };
+
+  // Step 1: Trim and normalize whitespace
+  let name = fullName.trim();
+  if (!name) return { first: '', last: '' };
+
+  // Step 2: Remove common titles (Mr., Mrs., Ms., Dr., Prof., etc.)
+  const titles = [
+    'Mr\\.?', 'Mrs\\.?', 'Ms\\.?', 'Miss\\.?',
+    'Dr\\.?', 'Prof\\.?', 'Prof\\. Dr\\.?',
+    'Sir', 'Madam',
+    'Sr\\.?', 'Jr\\.?', 'II', 'III', 'IV'
+  ];
+  
+  for (const title of titles) {
+    name = name.replace(new RegExp(`^${title}\\s+`, 'i'), '');
+  }
+
+  // Step 3: Remove extra whitespace (multiple spaces → single space)
+  name = name.replace(/\s+/g, ' ').trim();
+
+  if (!name) return { first: '', last: '' };
+
+  // Step 4: Split into parts
+  const parts = name.split(' ').filter(part => part.length > 0);
+
+  if (parts.length === 0) {
+    return { first: '', last: '' };
+  } else if (parts.length === 1) {
+    // Only one part: treat as first name, last name empty
+    return { first: parts, last: '' };
+  } else {
+    // Multiple parts: first is first name, rest is last name
+    const first = parts;
+    const last = parts.slice(1).join(' ');
+    return { first, last };
+  }
+};
 
 const simpleGrouping = (entities) => {
   const records = [];
@@ -181,11 +221,13 @@ const simpleGrouping = (entities) => {
 
   for (let i = 0; i < maxCount; i++) {
     const record = {};
+    // ✅ AFTER
     if (i < names.length) {
-      const nameParts = names[i].split(' ');
-      record.first_name = nameParts[0] || '';
-      record.last_name = nameParts.slice(1).join(' ') || '';
+      const { first, last } = parseFullName(names[i]);
+      record.first_name = first;
+      record.last_name = last;
     }
+
     if (i < mobiles.length) record.mobile = mobiles[i];
     if (i < addresses.length) record.address = addresses[i];
     if (i < emails.length) record.email = emails[i];
