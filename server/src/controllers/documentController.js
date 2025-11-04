@@ -56,7 +56,7 @@ export const processDocuments = async (req, res) => {
 const processPDFFiles = async (fileArray, collectionId, fileMetadatas) => {
   for (let i = 0; i < fileArray.length; i++) {
     const file = fileArray[i];
-    const fileMetadata = fileMetadatas[i];
+    let fileMetadata = fileMetadatas[i];
     try {
       const sessionDir = path.join(process.cwd(), "output", `session_${Date.now()}`);
       fs.mkdirSync(sessionDir, { recursive: true });
@@ -84,14 +84,14 @@ const processPDFFiles = async (fileArray, collectionId, fileMetadatas) => {
       await PostProcessRecord.bulkCreate(postProcessRecords);
 
       const uploadedFile = await CloudStorageService.uploadProcessedFiles([file], collectionId);
-      await fileMetadata.updateStatus('completed');
+      fileMetadata = await fileMetadata.updateStatus('completed');
       await fileMetadata.updateCloudStoragePath(uploadedFile[0].url);
 
       broadcast({ type: 'FILES_PROCESSED', collectionId: fileMetadata.collection_id, fileMetadata });
 
     } catch (error) {
       console.error(`🔥 Error processing file ${file.name}:`, error);
-      await fileMetadata.updateStatus('failed');
+      fileMetadata = await fileMetadata.updateStatus('failed');
       broadcast({ type: 'FILES_PROCESSED', collectionId: fileMetadata.collection_id, fileMetadata });
     }
   }

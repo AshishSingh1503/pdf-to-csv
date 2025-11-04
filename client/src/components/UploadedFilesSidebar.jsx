@@ -118,9 +118,9 @@ const UploadedFilesSidebar = ({ isOpen, onClose, selectedCollection }) => {
                   )} */}
                   <span
                     className={`px-2 py-1 text-xs font-semibold rounded-full ${
-                      file.processing_status === 'completed'
+                      file.processing_status.trim() === 'completed'
                         ? 'text-green-800 bg-green-200'
-                        : file.processing_status === 'processing'
+                        : file.processing_status.trim() === 'processing'
                         ? 'text-yellow-800 bg-yellow-200'
                         : 'text-red-800 bg-red-200'
                     }`}
