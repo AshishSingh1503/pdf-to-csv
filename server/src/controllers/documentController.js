@@ -292,60 +292,121 @@ export const downloadFile = (req, res) => {
     });
 };
 
+// FIXED: Excel Download with Proper Formatting
+
 const downloadCollectionFile = async (req, res, fileType) => {
   try {
     const { collectionId } = req.params;
     const { type } = req.query;
+
     const collection = await Collection.findById(collectionId);
     if (!collection) {
       return res.status(404).json({ error: "Collection not found" });
     }
 
     let records;
-    let fileName;
     if (type === 'post') {
       records = await PostProcessRecord.findAll(collectionId);
-      fileName = `post-process.${fileType}`;
     } else {
       records = await PreProcessRecord.findAll(collectionId);
-      fileName = `pre-process.${fileType}`;
     }
+
+    if (!records || records.length === 0) {
+      return res.status(404).json({ error: "No records found" });
+    }
+
+    console.log(`📊 Exporting ${fileType.toUpperCase()}: ${records.length} records`);
 
     const tempDir = path.join(process.cwd(), "temp", `collection-${collectionId}`);
     if (!fs.existsSync(tempDir)) {
       fs.mkdirSync(tempDir, { recursive: true });
     }
 
+    const fileName = `${type === 'post' ? 'post' : 'pre'}-process.${fileType}`;
     const filePath = path.join(tempDir, fileName);
 
     if (fileType === 'xlsx') {
-      const worksheet = xlsx.utils.json_to_sheet(records.map(r => ({...r})));
+      // ⭐ FORMAT RECORDS: Convert all fields to strings to preserve formatting
+      const formattedRecords = records.map(record => {
+        const formatted = {};
+        for (const [key, value] of Object.entries(record)) {
+          // Convert all values to strings to prevent Excel formatting issues
+          if (value === null || value === undefined) {
+            formatted[key] = '';
+          } else if (typeof value === 'number') {
+            // Force numbers to be strings (prevent scientific notation for mobile, prevent #### for dates)
+            formatted[key] = String(value);
+          } else {
+            formatted[key] = String(value);
+          }
+        }
+        return formatted;
+      });
+
+      // Create worksheet with formatted data
+      const worksheet = xlsx.utils.json_to_sheet(formattedRecords);
+
+      // ⭐ SET COLUMN WIDTHS: Auto-fit columns
+      const columnWidths = {};
+      const headers = Object.keys(formattedRecords[0] || {});
+      
+      headers.forEach(header => {
+        // Min width 12, max width 30
+        const maxLength = Math.max(
+          header.length,
+          Math.max(
+            ...formattedRecords.map(r => String(r[header] || '').length)
+          )
+        );
+        columnWidths[header] = { wch: Math.min(Math.max(maxLength + 2, 12), 30) };
+      });
+
+      worksheet['!cols'] = headers.map(h => columnWidths[h] || { wch: 12 });
+
+      // Create workbook and add worksheet
       const workbook = xlsx.utils.book_new();
-      xlsx.utils.book_append_sheet(workbook, worksheet, "Data");
+      xlsx.utils.book_append_sheet(workbook, worksheet, type === 'post' ? 'Post-Process' : 'Pre-Process');
+
+      // Write file
       xlsx.writeFile(workbook, filePath);
+      console.log(`✅ Created ${fileName}: ${fs.statSync(filePath).size} bytes`);
+
     } else {
+      // CSV export
       const csvWriter = createObjectCsvWriter({
         path: filePath,
-        header: Object.keys(records[0] || {}).map(key => ({id: key, title: key}))
+        header: Object.keys(records[0] || {}).map(key => ({ id: key, title: key }))
       });
       await csvWriter.writeRecords(records);
+      console.log(`✅ Created ${fileName}: ${fs.statSync(filePath).size} bytes`);
     }
 
+    // Download file
     res.download(filePath, `${collection.name}-${fileName}`, (err) => {
       if (err) {
-        console.error("🔥 Error downloading file:", err);
-        res.status(500).json({ error: "Could not download the file." });
+        console.error("🔥 Error downloading file:", err.message);
+      } else {
+        console.log(`✅ Downloaded ${fileName}`);
       }
-      fs.unlinkSync(filePath);
+      
+      // Cleanup
+      try {
+        fs.unlinkSync(filePath);
+      } catch (cleanupErr) {
+        console.warn(`⚠️  Cleanup error: ${cleanupErr.message}`);
+      }
     });
+
   } catch (err) {
-    console.error(`🔥 Error in downloadCollectionFile (${fileType}):`, err);
+    console.error(`🔥 Error in downloadCollectionFile:`, err);
     res.status(500).json({ error: err.message });
   }
-}
+};
 
-export const downloadCollectionExcels = (req, res) => downloadCollectionFile(req, res, 'xlsx');
+// Export functions that call this
 export const downloadCollectionCsvs = (req, res) => downloadCollectionFile(req, res, 'csv');
+export const downloadCollectionExcels = (req, res) => downloadCollectionFile(req, res, 'xlsx');
+
 
 export const getUploadedFiles = async (req, res) => {
   try {
