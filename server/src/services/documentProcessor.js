@@ -264,12 +264,33 @@ const extractEntitiesSimple = (document) => {
       // non-fatal — we'll fallback to order index below
     }
 
+    // --- NEW: Extract Bounding Box Coordinates ---
+    let midY = null;
+    let midX = null;
+    try {
+      const vertices = entity.pageAnchor?.pageRefs?.[0]?.boundingPoly?.normalizedVertices;
+      if (vertices && vertices.length >= 4) {
+        const ys = vertices.map(v => v.y || 0);
+        const xs = vertices.map(v => v.x || 0);
+        const minY = Math.min(...ys);
+        const maxY = Math.max(...ys);
+        const minX = Math.min(...xs);
+        midY = (minY + maxY) / 2;
+        midX = minX;
+      }
+    } catch (e) {
+      // non-fatal
+    }
+
+
     return {
       type,
       value,
       // if startIndex is NaN or undefined, set to null so we can detect missing anchors
       startIndex: Number.isFinite(startIndex) ? startIndex : null,
       endIndex: Number.isFinite(endIndex) ? endIndex : null,
+      midY,
+      midX,
       // keep original raw entity for debugging if needed
       __raw: entity,
       __order: idx
@@ -278,106 +299,108 @@ const extractEntitiesSimple = (document) => {
 };
 
 
-/**
- * simpleGrouping (position-aware)
- * - Uses entity.startIndex to map attributes to the nearest following name.
- * - Falls back to previous index-based zipping only if no positional info is available.
- */
 const simpleGrouping = (entities) => {
-  // If there are no entities, return empty
   if (!Array.isArray(entities) || entities.length === 0) return [];
 
-  // Count how many entities actually have startIndex info
-  const withPosition = entities.filter(e => e.startIndex !== null && e.startIndex !== undefined);
-  const positionAvailableRatio = withPosition.length / entities.length;
 
-  // If we have positions for at least ~30% of entities, use positional mapping (recommended)
-  const USE_POSITION = positionAvailableRatio >= 0.3;
-  // const USE_POSITION = false; // Force index-based grouping
-
-  if (!USE_POSITION) {
-    console.warn('⚠️ simpleGrouping: insufficient positional anchors — falling back to index-based grouping.');
-    // fallback: original logic but slightly safer (preserve order using __order)
-    const names = entities.filter(e => e.type === 'name').map(e => e.value);
-    const mobiles = entities.filter(e => e.type === 'mobile').map(e => e.value);
-    const addresses = entities.filter(e => e.type === 'address').map(e => e.value);
-    const emails = entities.filter(e => e.type === 'email').map(e => e.value);
-    const dobs = entities.filter(e => e.type === 'dateofbirth').map(e => e.value);
-    const landlines = entities.filter(e => e.type === 'landline').map(e => e.value);
-    const lastseens = entities.filter(e => e.type === 'lastseen').map(e => e.value);
-
-    const maxCount = Math.max(names.length, mobiles.length, addresses.length, emails.length, dobs.length, landlines.length, lastseens.length);
-    const records = [];
-    for (let i = 0; i < maxCount; i++) {
-      const record = {};
-      if (i < names.length) {
-        const { first, last } = parseFullName(names[i]);
-        record.first_name = first;
-        record.last_name = last;
-      }
-      if (i < mobiles.length) record.mobile = mobiles[i];
-      if (i < addresses.length) record.address = addresses[i];
-      if (i < emails.length) record.email = emails[i];
-      if (i < dobs.length) record.dateofbirth = dobs[i];
-      if (i < landlines.length) record.landline = landlines[i];
-      if (i < lastseens.length) record.lastseen = lastseens[i];
-      if (record.first_name) records.push(record);
-    }
-    return records;
-  }
-
-  // --- POSITION-AWARE MAPPING ---
-  // sort all entities by startIndex (if equal or null, use __order)
-  const sorted = [...entities].sort((a, b) => {
-    const aPos = a.startIndex !== null ? a.startIndex : Number.MAX_SAFE_INTEGER;
-    const bPos = b.startIndex !== null ? b.startIndex : Number.MAX_SAFE_INTEGER;
-    if (aPos !== bPos) return aPos - bPos;
-    return (a.__order || 0) - (b.__order || 0);
-  });
-
-  // collect name entities (with positions)
-  const nameEntities = sorted.filter(e => e.type === 'name');
-
-  const records = [];
-  // For each name, find the nearest entities after it up to the next name
-  for (let i = 0; i < nameEntities.length; i++) {
-    const nameEnt = nameEntities[i];
-    const nextName = nameEntities[i + 1];
-    const nameStart = nameEnt.startIndex !== null ? nameEnt.startIndex : nameEnt.__order;
-    const boundary = (nextName && nextName.startIndex !== null) ? nextName.startIndex : (nextName ? nextName.__order : Number.MAX_SAFE_INTEGER);
-
-    // collect other attributes that lie within (nameStart, boundary)
-    const slice = sorted.filter(e => {
-      // include the name itself
-      const pos = (e.startIndex !== null ? e.startIndex : e.__order);
-      return pos >= nameStart && pos < boundary;
+  // --- Fallback Grouping (Original startIndex logic) ---
+  const fallbackGrouping = () => {
+    console.warn('⚠️ simpleGrouping: Falling back to startIndex-based grouping.');
+    const sorted = [...entities].sort((a, b) => {
+      const aPos = a.startIndex !== null ? a.startIndex : Number.MAX_SAFE_INTEGER;
+      const bPos = b.startIndex !== null ? b.startIndex : Number.MAX_SAFE_INTEGER;
+      if (aPos !== bPos) return aPos - bPos;
+      return (a.__order || 0) - (b.__order || 0);
     });
 
+
+    const nameEntities = sorted.filter(e => e.type === 'name');
+    const records = [];
+
+
+    for (let i = 0; i < nameEntities.length; i++) {
+      const nameEnt = nameEntities[i];
+      const nextName = nameEntities[i + 1];
+      const nameStart = nameEnt.startIndex !== null ? nameEnt.startIndex : nameEnt.__order;
+      const boundary = (nextName && nextName.startIndex !== null) ? nextName.startIndex : Number.MAX_SAFE_INTEGER;
+
+
+      const slice = sorted.filter(e => {
+        const pos = (e.startIndex !== null ? e.startIndex : e.__order);
+        return pos >= nameStart && pos < boundary;
+      });
+
+
+      const record = {};
+      const { first, last } = parseFullName(nameEnt.value);
+      record.first_name = first;
+      record.last_name = last;
+
+
+      const getFirst = (type) => slice.find(s => s.type === type)?.value;
+      record.mobile = getFirst('mobile');
+      record.address = getFirst('address');
+      record.email = getFirst('email');
+      record.dateofbirth = getFirst('dateofbirth');
+      record.landline = getFirst('landline');
+      record.lastseen = getFirst('lastseen');
+      records.push(record);
+    }
+    return records;
+  };
+
+
+  // --- Coordinate-based Grouping ---
+  const withCoords = entities.filter(e => e.midY !== null && e.midX !== null);
+  if (withCoords.length / entities.length < 0.5) {
+    console.log(`[Diagnostic] Coordinate data found for ${withCoords.length}/${entities.length} entities. Not enough for coordinate-based grouping.`);
+    return fallbackGrouping();
+  }
+  console.log(`[Diagnostic] Using Y-coordinate grouping for ${withCoords.length}/${entities.length} entities.`);
+
+
+  const sorted = withCoords.sort((a, b) => {
+    if (a.midY !== b.midY) return a.midY - b.midY;
+    return a.midX - b.midX;
+  });
+
+
+  const rows = [];
+  if (sorted.length > 0) {
+    let currentRow = [sorted[0]];
+    for (let i = 1; i < sorted.length; i++) {
+      const prev = sorted[i - 1];
+      const curr = sorted[i];
+      if (Math.abs(curr.midY - prev.midY) < 0.01) { // ROW_Y_TOLERANCE
+        currentRow.push(curr);
+      } else {
+        rows.push(currentRow);
+        currentRow = [curr];
+      }
+    }
+    rows.push(currentRow);
+  }
+
+
+  return rows.map(row => {
     const record = {};
-    // name parsing
-    const { first, last } = parseFullName(nameEnt.value);
-    record.first_name = first;
-    record.last_name = last;
+    const nameEntity = row.find(e => e.type === 'name');
+    if (nameEntity) {
+      const { first, last } = parseFullName(nameEntity.value);
+      record.first_name = first;
+      record.last_name = last;
+    }
 
-    // helper to get first attribute of a type in the slice
-    const getFirst = (type) => {
-      const ent = slice.find(s => s.type === type);
-      return ent ? ent.value : undefined;
-    };
 
+    const getFirst = (type) => row.find(e => e.type === type)?.value;
     record.mobile = getFirst('mobile');
     record.address = getFirst('address');
     record.email = getFirst('email');
     record.dateofbirth = getFirst('dateofbirth');
     record.landline = getFirst('landline');
     record.lastseen = getFirst('lastseen');
-
-    records.push(record);
-  }
-
-  // There might be mobiles/addresses that occur *before* the first name — optionally create or ignore them.
-  // For now we ignore orphan attributes (as your cleanAndValidate will drop records without a valid name/mobile).
-  return records;
+    return record;
+  }).filter(r => r.first_name);
 };
 
 
