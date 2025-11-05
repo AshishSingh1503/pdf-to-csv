@@ -1,22 +1,7 @@
-// server/src/services/validators.worker.js
-import { parentPort } from "worker_threads";
+// --- START: validators.worker.js ---
 
-/**
- * Worker thread for parallel record validation
- * Handles CPU-intensive cleaning and validation operations
- */
-
-const cleanName = (name, patterns) => {
-  if (!name) return '';
-  let s = name.trim();
-  s = s.replace(patterns.nameSpecialChars, '');
-  s = s.replace(/[\d?]+/g, '');
-  s = s.replace(patterns.nameInvalidChars, '');
-  s = s.replace(patterns.whitespaceMultiple, ' ').trim();
-  const parts = s ? s.split(' ').map(p => p.charAt(0).toUpperCase() + p.slice(1)) : [];
-  return parts.join(' ').trim();
-};
-
+// --- Helper Functions (Worker-Compatible) ---
+// Note: These must be defined *inside* the worker file to be accessible.
 
 const _single_line_address = (address, patterns) => {
   if (!address) return '';
@@ -26,7 +11,6 @@ const _single_line_address = (address, patterns) => {
   s = s.endsWith('.') ? s.slice(0, -1) : s;
   return s;
 }
-
 
 const fixAddressOrdering = (address, patterns) => {
   if (!address) return address;
@@ -67,25 +51,48 @@ const fixAddressOrdering = (address, patterns) => {
   return s;
 };
 
+const cleanName = (name, patterns) => {
+  if (!name) return '';
+  let s = name.trim();
+  s = s.replace(patterns.nameSpecialChars, '');
+  s = s.replace(/[\d?]+/g, '');
+  s = s.replace(patterns.nameInvalidChars, '');
+  s = s.replace(patterns.whitespaceMultiple, ' ').trim();
+  const parts = s ? s.split(' ').map(p => p.charAt(0).toUpperCase() + p.slice(1)) : [];
+  return parts.join(' ').trim();
+};
 
 const normalizeDateField = (dateStr, patterns) => {
   if (!dateStr) return '';
+  
   let s = dateStr.trim();
   s = s.replace(patterns.dashNormalize, '-');
+  s = s.replace(patterns.whitespaceMultiple, '-');
   s = s.replace(patterns.dashMultiple, '-');
-  s = s.replace(patterns.dashTrim, '');
   s = s.replace(patterns.dateInvalidChars, '');
-  s = s.replace(/\./g, '-');
+  s = s.replace(/[\.-]/g, '-');
+  s = s.replace(patterns.dashTrim, '');
 
-  const match = s.match(patterns.dateFormat);
-  if (match) {
-    s = `${match[1]}-${match[2]}-${match[3]}`;
+  const matchFormat1 = s.match(/^(\d{1,2})-([A-Za-z]{3,})-?(\d{4})$/);
+  if (matchFormat1) {
+    s = `${matchFormat1[1]}-${matchFormat1[2]}-${matchFormat1[3]}`;
+  }
+
+  const matchFormat2 = s.match(/^([A-Za-z]{3,})-?(\d{4})-?(\d{1,2})$/);
+  if (matchFormat2) {
+    s = `${matchFormat2[3]}-${matchFormat2[1]}-${matchFormat2[2]}`;
+  }
+  
+  const matchFormat3 = s.match(/^(\d{1,2})-([A-Za-z]{3,})-(\d{4})$/);
+  if (matchFormat3) {
+      s = `${matchFormat3[1]} ${matchFormat3[2]} ${matchFormat3[3]}`;
   }
 
   try {
     const dt = new Date(s);
     if (isNaN(dt.getTime())) return '';
     const year = dt.getFullYear();
+    if (year < 1900 || year > 2023) return ''; 
     const month = String(dt.getMonth() + 1).padStart(2, '0');
     const day = String(dt.getDate()).padStart(2, '0');
     return `${year}-${month}-${day}`;
@@ -94,43 +101,53 @@ const normalizeDateField = (dateStr, patterns) => {
   }
 };
 
-
 const isValidLandline = (landline, patterns) => {
   if (!landline) return false;
   const digits = landline.replace(patterns.digitOnly, '');
   return digits.length >= 10;
 };
 
+// --- Main Validation Function ---
 
 const cleanAndValidateRecords = (records, patterns) => {
   const cleanRecords = [];
 
   for (const record of records) {
-    const rawFirst = record.first_name?.trim() || '';
-    const rawLast = record.last_name?.trim() || '';
-    const rawDob = record.dateofbirth?.trim() || '';
-    const rawLastseen = record.lastseen?.trim() || '';
+    // Use String() for safety, handles null/undefined
+    const rawFirst = String(record.first_name || '').trim();
+    const rawLast = String(record.last_name || '').trim();
+    const rawDob = String(record.dateofbirth || '').trim();
+    const rawLastseen = String(record.lastseen || '').trim();
 
     const firstName = cleanName(rawFirst, patterns);
     const lastName = cleanName(rawLast, patterns);
 
-    const mobile = record.mobile?.trim() || '';
-    let address = record.address?.trim() || '';
-    const email = record.email?.trim() || '';
-    const rawLandline = record.landline?.trim() || '';
+    const mobile = String(record.mobile || '').trim();
+    let address = String(record.address || '').trim();
+    const email = String(record.email || '').trim();
+    const rawLandline = String(record.landline || '').trim();
 
     address = fixAddressOrdering(address, patterns);
 
     const dateofbirth = normalizeDateField(rawDob, patterns);
     const lastseen = normalizeDateField(rawLastseen, patterns);
 
+    // --- VALIDATION RULES ---
+
+    // Rule 1: Must have a valid name
     if (!firstName || firstName.length <= 1) continue;
+
+    // Rule 2: Must have a mobile
     if (!mobile) continue;
 
+    // Rule 3: Mobile must be a valid 10-digit AU number
     const mobileDigits = mobile.replace(patterns.digitOnly, '');
     if (!(mobileDigits.length === 10 && mobileDigits.startsWith('04'))) continue;
 
-    if (!address || !/\d/.test(address.substring(0, 25))) continue;
+    // Rule 4: Address must exist and contain at least one number *anywhere*
+    // 👇 --- THIS IS THE FIX --- 👇
+    if (!address || !/\d/.test(address)) continue;
+    // 👆 --- THIS WAS THE BUGGY LINE --- 👆
 
     const landline = isValidLandline(rawLandline, patterns) ? rawLandline.replace(patterns.digitOnly, '') : '';
 
@@ -146,30 +163,23 @@ const cleanAndValidateRecords = (records, patterns) => {
     });
   }
 
-  // Deduplicate by mobile
-  const uniqueRecords = [];
-  const seenMobiles = new Set();
-  for (const record of cleanRecords) {
-    if (!seenMobiles.has(record.mobile)) {
-      uniqueRecords.push(record);
-      seenMobiles.add(record.mobile);
-    }
-  }
-
-  return uniqueRecords;
+  // NOTE: De-duplication will be handled in the main thread
+  // after all worker batches are combined.
+  return cleanRecords;
 };
 
+// --- Worker Message Handler ---
 
-// Listen for validation tasks
-parentPort.on('message', (task) => {
+self.onmessage = ({ data }) => {
   try {
-    if (task.type === 'validate') {
-      const validatedRecords = cleanAndValidateRecords(task.records, task.patterns);
-      parentPort.postMessage(validatedRecords);
-    } else {
-      parentPort.postMessage({ error: `Unknown task type: ${task.type}` });
+    if (data.type === 'validate') {
+      const filteredRecords = cleanAndValidateRecords(data.records, data.patterns);
+      // Send the filtered (but not yet unique) records back
+      self.postMessage(filteredRecords);
     }
   } catch (error) {
-    parentPort.postMessage({ error: error.message });
+    self.postMessage({ error: error.message, stack: error.stack });
   }
-});
+};
+
+// --- END: validators.worker.js ---

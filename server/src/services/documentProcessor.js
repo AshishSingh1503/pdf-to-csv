@@ -769,7 +769,8 @@ const cleanAndValidate = (records) => {
     const mobileDigits = mobile.replace(REGEX_PATTERNS.digitOnly, '');
     if (!(mobileDigits.length === 10 && mobileDigits.startsWith('04'))) continue;
 
-    if (!address || !/\d/.test(address.substring(0, 25))) continue;
+    // 👇 --- THIS IS THE FIX (matching the worker) --- 👇
+    if (!address || !/\d/.test(address)) continue;
 
     const landline = isValidLandline(rawLandline) ? rawLandline.replace(REGEX_PATTERNS.digitOnly, '') : '';
 
@@ -785,18 +786,9 @@ const cleanAndValidate = (records) => {
     });
   }
 
-  const uniqueRecords = [];
-  const seenMobiles = new Set();
-  for (const record of cleanRecords) {
-    if (!seenMobiles.has(record.mobile)) {
-      uniqueRecords.push(record);
-      seenMobiles.add(record.mobile);
-    }
-  }
-
-  return uniqueRecords;
+  // De-duplication has been moved to processPDFs
+  return cleanRecords;
 };
-
 
 
 // --- PDF Size Checking (PITFALL FIX) ---
@@ -911,10 +903,23 @@ export const processPDFs = async (pdfFiles, batchSize = 10, maxWorkers = 4) => {
         const rawRecords = simpleGrouping(entities);
 
         // OPTIMIZATION 5: Batch validate records in parallel
-        const filteredRecords = await batchValidateRecords(rawRecords, 100);
+        // OPTIMIZATION 5: Batch validate records in parallel
+                const filteredRecordsRaw = await batchValidateRecords(rawRecords, 100);
 
-        rawRecords.forEach(r => r.file_name = file.name);
-        filteredRecords.forEach(r => r.file_name = file.name);
+        // 👇 --- ADD THIS DE-DUPLICATION BLOCK --- 👇
+        const uniqueRecords = [];
+        const seenMobiles = new Set();
+        for (const record of filteredRecordsRaw) {
+          if (!seenMobiles.has(record.mobile)) {
+            uniqueRecords.push(record);
+            seenMobiles.add(record.mobile);
+          }
+        }
+        const filteredRecords = uniqueRecords; // Use the de-duplicated list
+        // 👆 --- END OF NEW BLOCK --- 👆
+
+        rawRecords.forEach(r => r.file_name = file.name);
+        filteredRecords.forEach(r => r.file_name = file.name); // This now uses the unique list
 
         // OPTIMIZATION 5: Parallel JSON generation
         const { preProcessingJson, postProcessingJson } = await generateJsonObjects(
