@@ -1,6 +1,6 @@
 // server/src/services/documentProcessor.js
 import { DocumentProcessorServiceClient } from "@google-cloud/documentai";
-import  Parser from "name-parser";
+import Parser from "name-parser";
 import { config } from "../config/index.js";
 import fs from "fs";
 import path from "path";
@@ -13,23 +13,20 @@ import { promises as fsPromises } from "fs";
 
 
 // --- CONFIGURATION & CONSTANTS ---
-const SAFE_MAX_WORKERS = 12; // Reduced from 20 to avoid GCP rate limiting
-const WORKER_THREAD_POOL_SIZE = Math.min(os.cpus().length, 4); // 4-8 threads max
-const MAX_PDF_SIZE_BYTES = 50 * 1024 * 1024; // 50MB warning threshold
-const PDF_SIZE_WARN_BYTES = 30 * 1024 * 1024; // 30MB soft limit
+const SAFE_MAX_WORKERS = 12;
+const WORKER_THREAD_POOL_SIZE = Math.min(os.cpus().length, 4);
+const MAX_PDF_SIZE_BYTES = 50 * 1024 * 1024;
+const PDF_SIZE_WARN_BYTES = 30 * 1024 * 1024;
 const BATCH_SIZE_RECORDS = 500;
 const RETRY_ATTEMPTS = 3;
 const INITIAL_BACKOFF_MS = 1000;
-const REQUEST_TIMEOUT_MS = 600000; // 10 minutes for large PDFs
-
-
+const REQUEST_TIMEOUT_MS = 600000;
 
 // --- Global State Management ---
 let client;
 let workerThreadPool = null;
 let activeRequests = 0;
-const MAX_CONCURRENT_REQUESTS = 15; // Hard cap for GCP quota safety
-
+const MAX_CONCURRENT_REQUESTS = 15;
 
 try {
   const clientConfig = process.env.NODE_ENV === 'production' ? {} : { keyFilename: config.credentials };
@@ -39,7 +36,6 @@ try {
   console.error("🔥 Failed to initialize Document AI client:", error);
   throw new Error("Failed to initialize Document AI client. Please check your Google Cloud credentials.");
 }
-
 
 
 // --- OPTIMIZATION 6: Pre-compiled Regex Patterns ---
@@ -60,7 +56,6 @@ const REGEX_PATTERNS = {
 };
 
 
-
 // --- WORKER THREAD POOL MANAGEMENT ---
 class WorkerThreadPool {
   constructor(poolSize) {
@@ -71,23 +66,19 @@ class WorkerThreadPool {
     this.initialize();
   }
 
-
   initialize() {
     for (let i = 0; i < this.poolSize; i++) {
       this.workers.push({
         isAvailable: true,
-        worker: null, // Lazily initialized
+        worker: null,
       });
     }
     console.log(`🧵 Worker thread pool initialized with ${this.poolSize} slots`);
   }
 
-
   async runTask(task) {
     return new Promise((resolve, reject) => {
       const availableWorker = this.workers.find(w => w.isAvailable);
-
-
       if (availableWorker) {
         this.executeOnWorker(availableWorker, task, resolve, reject);
       } else {
@@ -96,49 +87,30 @@ class WorkerThreadPool {
     });
   }
 
-
   executeOnWorker(workerSlot, task, resolve, reject) {
-    // PITFALL FIX: Lazy initialize workers to avoid startup overhead
     if (!workerSlot.worker) {
       workerSlot.worker = new Worker(new URL('./validators.worker.js', import.meta.url));
       workerSlot.worker.on('error', reject);
       workerSlot.worker.on('exit', (code) => {
-        if (code !== 0) {
-          reject(new Error(`Worker exited with code ${code}`));
-        }
+        if (code !== 0) reject(new Error(`Worker exited with code ${code}`));
       });
     }
-
-
     workerSlot.isAvailable = false;
     this.activeCount++;
-
-
     const timeout = setTimeout(() => {
       reject(new Error('Worker task timeout'));
       workerSlot.isAvailable = true;
       this.activeCount--;
       this.processQueue();
-    }, 60000); // 60s per worker task
-
-
+    }, 60000);
     workerSlot.worker.once('message', (result) => {
       clearTimeout(timeout);
       workerSlot.isAvailable = true;
       this.activeCount--;
-
-
-      if (result.error) {
-        reject(new Error(result.error));
-      } else {
-        resolve(result);
-      }
-
-
+      if (result.error) reject(new Error(result.error));
+      else resolve(result);
       this.processQueue();
     });
-
-
     workerSlot.worker.on('error', (error) => {
       clearTimeout(timeout);
       workerSlot.isAvailable = true;
@@ -147,12 +119,8 @@ class WorkerThreadPool {
       reject(error);
       this.processQueue();
     });
-
-
     workerSlot.worker.postMessage(task);
   }
-
-
   processQueue() {
     if (this.taskQueue.length > 0 && this.workers.some(w => w.isAvailable)) {
       const { task, resolve, reject } = this.taskQueue.shift();
@@ -160,8 +128,6 @@ class WorkerThreadPool {
       this.executeOnWorker(availableWorker, task, resolve, reject);
     }
   }
-
-
   async terminate() {
     for (const workerSlot of this.workers) {
       if (workerSlot.worker) {
@@ -176,10 +142,7 @@ class WorkerThreadPool {
   }
 }
 
-
-
 // --- Helper Functions ---
-
 
 const extractEntitiesSimple = (document) => {
   return document.entities?.map(entity => ({
@@ -193,25 +156,17 @@ const extractEntitiesSimple = (document) => {
 // ⭐ UPDATED: Use name-parser library for accurate name splitting
 const parseFullName = (fullName) => {
   if (!fullName) return { first: '', last: '' };
-
   try {
-    // Use name-parser library for accurate parsing
     const parsed = new Parser(fullName);
     const firstName = parsed.firstName() || '';
     const lastName = parsed.lastName() || '';
-
-    // Validate that we got meaningful results
     if (!firstName && !lastName) {
-      console.warn(`⚠️  name-parser couldn't parse: "${fullName}"`);
-      // Fallback to manual split if library fails
       const parts = fullName.trim().split(/\s+/);
       return {
         first: parts[0] || '',
         last: parts.slice(1).join(' ') || ''
       };
     }
-
-    // If one is missing but we have the other, use manual fallback for completeness
     if ((!firstName || !lastName) && fullName.trim()) {
       const parts = fullName.trim().split(/\s+/);
       return {
@@ -219,11 +174,8 @@ const parseFullName = (fullName) => {
         last: lastName || parts.slice(1).join(' ') || ''
       };
     }
-
     return { first: firstName, last: lastName };
   } catch (error) {
-    console.error(`❌ Name parser error for "${fullName}":`, error.message);
-    // Emergency fallback to manual parsing
     const parts = fullName.trim().split(/\s+/);
     return {
       first: parts[0] || '',
@@ -235,32 +187,15 @@ const parseFullName = (fullName) => {
 
 
 const simpleGrouping = (entities) => {
-  // ⭐ FIXED: Group entities by POSITION in document, not by TYPE
-  
-  if (!entities || entities.length === 0) {
-    return [];
-  }
-
-  // Step 1: Group entities by their position/context in the document
-  // Build a position map to track which fields belong together
+  if (!entities || entities.length === 0) return [];
   const positionMap = {};
   let currentPosition = 0;
-
-  // Track where each entity appears (by index in the original entities array)
-  const entityIndices = {};
-  
-  entities.forEach((entity, idx) => {
+  entities.forEach((entity) => {
     if (!entity.type) return;
-    
     const type = entity.type.toLowerCase().trim();
-    
-    // ⭐ KEY FIX: Group name with following fields (mobile, address, email, etc.)
-    // Assume: Name is the start of a new record
-    // All following fields belong to that name until we hit another name
-    
     if (type === 'name') {
       currentPosition++;
-      positionMap[currentPosition] = { 
+      positionMap[currentPosition] = {
         name: entity.value,
         mobile: null,
         address: null,
@@ -270,7 +205,6 @@ const simpleGrouping = (entities) => {
         lastseen: null
       };
     } else if (currentPosition > 0 && positionMap[currentPosition]) {
-      // Assign this field to the current position
       if (type === 'mobile' && !positionMap[currentPosition].mobile) {
         positionMap[currentPosition].mobile = entity.value;
       } else if (type === 'address' && !positionMap[currentPosition].address) {
@@ -286,16 +220,11 @@ const simpleGrouping = (entities) => {
       }
     }
   });
-
-  // Step 2: Convert position map to records array
   const records = [];
-  for (const position in positionMap) {
-    const data = positionMap[position];
-    
+  for (const pos in positionMap) {
+    const data = positionMap[pos];
     if (data.name) {
-      // ⭐ Parse full name into first and last
       const { first, last } = parseFullName(data.name);
-      
       records.push({
         first_name: first,
         last_name: last,
@@ -304,15 +233,14 @@ const simpleGrouping = (entities) => {
         email: data.email || '',
         dateofbirth: data.dateofbirth || '',
         landline: data.landline || '',
-        lastseen: data.lastseen || ''
+        lastseen: data.lastseen || '',
       });
     }
   }
-
-  console.log(`📋 simpleGrouping: Grouped ${records.length} records from ${entities.length} entities`);
-  
   return records;
 };
+
+
 
 const _single_line_address = (address) => {
   if (!address) return '';
@@ -324,43 +252,36 @@ const _single_line_address = (address) => {
 }
 
 
-
 const fixAddressOrdering = (address) => {
+  // ... keep your full fixAddressOrdering implementation unchanged ...
   if (!address) return address;
-
-  let s = _single_line_address(address).trim();
+  let s = address.replace(/\r/g, ' ').replace(/\n/g, ' ');
+  s = s.replace(/[,;\|/]+/g, ' ');
+  s = s.replace(REGEX_PATTERNS.whitespaceMultiple, ' ').trim();
+  s = s.endsWith('.') ? s.slice(0, -1) : s;
   let match;
-
   match = s.match(REGEX_PATTERNS.addressStatePostcodeStart);
   if (match) {
     const [, state, postcode, rest] = match;
-    const out = `${rest.trim()} ${state.toUpperCase()} ${postcode}`;
-    return out.replace(REGEX_PATTERNS.whitespaceMultiple, ' ').trim();
+    return `${rest.trim()} ${state.toUpperCase()} ${postcode}`.replace(REGEX_PATTERNS.whitespaceMultiple, ' ').trim();
   }
-
   match = s.match(REGEX_PATTERNS.addressPostcodeStateEnd);
   if (match) {
     const [, postcode, rest, state] = match;
-    const out = `${rest.trim()} ${state.toUpperCase()} ${postcode}`;
-    return out.replace(REGEX_PATTERNS.whitespaceMultiple, ' ').trim();
+    return `${rest.trim()} ${state.toUpperCase()} ${postcode}`.replace(REGEX_PATTERNS.whitespaceMultiple, ' ').trim();
   }
-
   match = s.match(REGEX_PATTERNS.addressStatePostcodeMiddle);
   if (match) {
     const [, part1, state, postcode, part2] = match;
-    const out = `${part1.trim()} ${part2.trim()} ${state.toUpperCase()} ${postcode}`;
-    return out.replace(REGEX_PATTERNS.whitespaceMultiple, ' ').trim();
+    return `${part1.trim()} ${part2.trim()} ${state.toUpperCase()} ${postcode}`.replace(REGEX_PATTERNS.whitespaceMultiple, ' ').trim();
   }
-
   match = s.match(REGEX_PATTERNS.addressStatePostcodeAny);
   if (match) {
     const state = match[1].toUpperCase();
     const postcode = match[2];
     const rest = (s.substring(0, match.index) + s.substring(match.index + match[0].length)).trim();
-    const out = `${rest.replace(REGEX_PATTERNS.whitespaceMultiple, ' ')} ${state} ${postcode}`;
-    return out.trim();
+    return `${rest.replace(REGEX_PATTERNS.whitespaceMultiple, ' ')} ${state} ${postcode}`.trim();
   }
-
   return s;
 };
 
@@ -387,12 +308,10 @@ const normalizeDateField = (dateStr) => {
   s = s.replace(REGEX_PATTERNS.dashTrim, '');
   s = s.replace(REGEX_PATTERNS.dateInvalidChars, '');
   s = s.replace(/\./g, '-');
-
   const match = s.match(REGEX_PATTERNS.dateFormat);
   if (match) {
     s = `${match[1]}-${match[2]}-${match[3]}`;
   }
-
   try {
     const dt = new Date(s);
     if (isNaN(dt.getTime())) return '';
@@ -406,7 +325,7 @@ const normalizeDateField = (dateStr) => {
 };
 
 
-
+// --- POST-PROCESSING FILTERING ---
 const isValidLandline = (landline) => {
   if (!landline) return false;
   const digits = landline.replace(REGEX_PATTERNS.digitOnly, '');
@@ -619,41 +538,27 @@ const batchValidateRecords = async (records, batchSize = 100) => {
 };
 
 
-
-// ⭐ UPDATED: Use safe String().trim() for all field access
 const cleanAndValidate = (records) => {
   const cleanRecords = [];
-
   for (const record of records) {
-    // ⭐ Use String() to safely convert any type to string before trim()
     const rawFirst = String(record.first_name || '').trim();
-    const rawLast = String(record.last_name || '').trim();
-    const rawDob = String(record.dateofbirth || '').trim();
-    const rawLastseen = String(record.lastseen || '').trim();
-
     const firstName = cleanName(rawFirst);
-    const lastName = cleanName(rawLast);
-
+    const lastName = cleanName(String(record.last_name || '').trim());
     const mobile = String(record.mobile || '').trim();
+    const mobileDigits = mobile.replace(REGEX_PATTERNS.digitOnly, '');
     let address = String(record.address || '').trim();
+    address = fixAddressOrdering(address);
     const email = String(record.email || '').trim();
     const rawLandline = String(record.landline || '').trim();
-
-    address = fixAddressOrdering(address);
-
-    const dateofbirth = normalizeDateField(rawDob);
-    const lastseen = normalizeDateField(rawLastseen);
-
+    const landline = isValidLandline(rawLandline)
+      ? rawLandline.replace(REGEX_PATTERNS.digitOnly, '')
+      : '';
+    const dateofbirth = normalizeDateField(String(record.dateofbirth || '').trim());
+    const lastseen = normalizeDateField(String(record.lastseen || '').trim());
     if (!firstName || firstName.length <= 1) continue;
     if (!mobile) continue;
-
-    const mobileDigits = mobile.replace(REGEX_PATTERNS.digitOnly, '');
     if (!(mobileDigits.length === 10 && mobileDigits.startsWith('04'))) continue;
-
     if (!address || !/\d/.test(address.substring(0, 25))) continue;
-
-    const landline = isValidLandline(rawLandline) ? rawLandline.replace(REGEX_PATTERNS.digitOnly, '') : '';
-
     cleanRecords.push({
       first_name: firstName,
       last_name: lastName,
@@ -665,7 +570,6 @@ const cleanAndValidate = (records) => {
       lastseen: lastseen || '',
     });
   }
-
   const uniqueRecords = [];
   const seenMobiles = new Set();
   for (const record of cleanRecords) {
@@ -674,7 +578,6 @@ const cleanAndValidate = (records) => {
       seenMobiles.add(record.mobile);
     }
   }
-
   return uniqueRecords;
 };
 
@@ -736,48 +639,28 @@ const setupGracefulShutdown = async () => {
  * @returns {Promise<Object>} Aggregated results from all files
  */
 export const processPDFs = async (pdfFiles, batchSize = 10, maxWorkers = 4) => {
-  // Initialize worker thread pool if needed
   if (!workerThreadPool && pdfFiles.length >= 10) {
     workerThreadPool = new WorkerThreadPool(WORKER_THREAD_POOL_SIZE);
     setupGracefulShutdown();
   }
-
-  // ⭐ NEW LOGIC: Scale workers based on file count
   let scaledWorkers = SAFE_MAX_WORKERS;
-  
-  if (pdfFiles.length === 1) {
-    scaledWorkers = 2;
-  } else if (pdfFiles.length === 2) {
-    scaledWorkers = 5;
-  } else if (pdfFiles.length <= 10) {
-    scaledWorkers = 5;
-  } else if (pdfFiles.length <= 30) {
-    scaledWorkers = pdfFiles.length;  // ⭐ Send ALL to Google immediately!
-  } else if (pdfFiles.length <= 100) {
-    scaledWorkers = 50;  // ⭐ For 100 files, use 50 workers
-  } else {
-    scaledWorkers = 75;  // ⭐ For 100+ files, use 75 workers
-  }
-
+  if (pdfFiles.length === 1) scaledWorkers = 2;
+  else if (pdfFiles.length === 2) scaledWorkers = 5;
+  else if (pdfFiles.length <= 10) scaledWorkers = 5;
+  else if (pdfFiles.length <= 30) scaledWorkers = pdfFiles.length;
+  else if (pdfFiles.length <= 100) scaledWorkers = 50;
+  else scaledWorkers = 75;
   console.log(`📊 Processing ${pdfFiles.length} files | Workers: ${scaledWorkers} | Pool: ${workerThreadPool ? WORKER_THREAD_POOL_SIZE : 0} threads`);
-  const limit = pLimit(scaledWorkers);  // ⭐ Use dynamic concurrency
+  const limit = pLimit(scaledWorkers);
   const startTime = Date.now();
-  
   try {
     const tempDir = path.join(process.cwd(), "temp");
     if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
-
     const processFile = async (file, index) => {
       const tempPath = path.join(tempDir, file.name);
-
       try {
-        // Save uploaded file to temp
         await file.mv(tempPath);
-
-        // PITFALL FIX: Check PDF size before processing
         await checkPdfSize(tempPath, file.name);
-
-        // OPTIMIZATION 4: Retry with backoff
         const [result] = await retryWithBackoff(async () => {
           return await client.processDocument({
             name: `projects/${config.projectId}/locations/${config.location}/processors/${config.processorId}`,
@@ -787,17 +670,11 @@ export const processPDFs = async (pdfFiles, batchSize = 10, maxWorkers = 4) => {
             },
           });
         }, RETRY_ATTEMPTS, INITIAL_BACKOFF_MS);
-
         const entities = extractEntitiesSimple(result.document);
         const rawRecords = simpleGrouping(entities);
-
-        // OPTIMIZATION 5: Batch validate records in parallel
         const filteredRecords = await batchValidateRecords(rawRecords, 100);
-
         rawRecords.forEach(r => r.file_name = file.name);
         filteredRecords.forEach(r => r.file_name = file.name);
-
-        // OPTIMIZATION 5: Parallel JSON generation
         const { preProcessingJson, postProcessingJson } = await generateJsonObjects(
           rawRecords,
           filteredRecords,
@@ -805,9 +682,7 @@ export const processPDFs = async (pdfFiles, batchSize = 10, maxWorkers = 4) => {
           result.document.text,
           file.name
         );
-
         console.log(`✅ [${index + 1}/${pdfFiles.length}] ${file.name} → ${filteredRecords.length} records`);
-
         return {
           rawRecords,
           filteredRecords,
@@ -824,48 +699,33 @@ export const processPDFs = async (pdfFiles, batchSize = 10, maxWorkers = 4) => {
           error: fileError.message
         };
       } finally {
-        // OPTIMIZATION 3: Async cleanup
         await cleanupTempFile(tempPath);
       }
     };
-
-    // Process files with concurrency limit
     const processingPromises = pdfFiles.map((file, index) =>
       limit(() => processFile(file, index))
     );
-
     const results = await Promise.all(processingPromises);
-
-    // Aggregate results
     const allRawRecords = results
       .filter(r => !r.error)
       .flatMap(r => r.rawRecords);
-    
     const allFilteredRecords = results
       .filter(r => !r.error)
       .flatMap(r => r.filteredRecords);
-    
     const allPreProcessingJson = results
       .filter(r => r.preProcessingJson)
       .map(r => r.preProcessingJson);
-    
     const allPostProcessingJson = results
       .filter(r => r.postProcessingJson)
       .map(r => r.postProcessingJson);
-
     const processingTime = ((Date.now() - startTime) / 1000).toFixed(2);
-    const successRate = allRawRecords.length > 0 
-      ? `${((allFilteredRecords.length / allRawRecords.length) * 100).toFixed(1)}%` 
+    const successRate = allRawRecords.length > 0
+      ? `${((allFilteredRecords.length / allRawRecords.length) * 100).toFixed(1)}%`
       : "0%";
-
     console.log(`\n⏱️  Processing complete in ${processingTime}s | Success rate: ${successRate}`);
-
-    // PITFALL FIX: Cleanup worker pool after batch
     if (workerThreadPool && pdfFiles.length >= 10 && activeRequests === 0) {
-      // Keep pool alive for reuse
       console.log('🧵 Worker pool ready for reuse');
     }
-
     return {
       allRawRecords,
       allFilteredRecords,
@@ -878,14 +738,8 @@ export const processPDFs = async (pdfFiles, batchSize = 10, maxWorkers = 4) => {
   }
 };
 
-
-
-// --- Cleanup on module unload ---
 process.on('exit', async () => {
   if (workerThreadPool) {
     await workerThreadPool.terminate();
   }
 });
-
-
-// export { batchInsertRecords };
