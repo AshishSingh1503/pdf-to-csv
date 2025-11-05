@@ -235,42 +235,84 @@ const parseFullName = (fullName) => {
 
 
 const simpleGrouping = (entities) => {
-  const records = [];
-  const names = entities.filter(e => e.type === 'name').map(e => e.value);
-  const mobiles = entities.filter(e => e.type === 'mobile').map(e => e.value);
-  const addresses = entities.filter(e => e.type === 'address').map(e => e.value);
-  const emails = entities.filter(e => e.type === 'email').map(e => e.value);
-  const dobs = entities.filter(e => e.type === 'dateofbirth').map(e => e.value);
-  const landlines = entities.filter(e => e.type === 'landline').map(e => e.value);
-  const lastseens = entities.filter(e => e.type === 'lastseen').map(e => e.value);
+  // ⭐ FIXED: Group entities by POSITION in document, not by TYPE
+  
+  if (!entities || entities.length === 0) {
+    return [];
+  }
 
-  const maxCount = Math.max(names.length, mobiles.length, addresses.length, emails.length, dobs.length, landlines.length, lastseens.length);
+  // Step 1: Group entities by their position/context in the document
+  // Build a position map to track which fields belong together
+  const positionMap = {};
+  let currentPosition = 0;
 
-  for (let i = 0; i < maxCount; i++) {
-    const record = {};
+  // Track where each entity appears (by index in the original entities array)
+  const entityIndices = {};
+  
+  entities.forEach((entity, idx) => {
+    if (!entity.type) return;
     
-    if (i < names.length) {
-      // ⭐ Use name-parser for accurate first/last name splitting
-      const { first, last } = parseFullName(names[i]);
-      record.first_name = first;
-      record.last_name = last;
+    const type = entity.type.toLowerCase().trim();
+    
+    // ⭐ KEY FIX: Group name with following fields (mobile, address, email, etc.)
+    // Assume: Name is the start of a new record
+    // All following fields belong to that name until we hit another name
+    
+    if (type === 'name') {
+      currentPosition++;
+      positionMap[currentPosition] = { 
+        name: entity.value,
+        mobile: null,
+        address: null,
+        email: null,
+        dateofbirth: null,
+        landline: null,
+        lastseen: null
+      };
+    } else if (currentPosition > 0 && positionMap[currentPosition]) {
+      // Assign this field to the current position
+      if (type === 'mobile' && !positionMap[currentPosition].mobile) {
+        positionMap[currentPosition].mobile = entity.value;
+      } else if (type === 'address' && !positionMap[currentPosition].address) {
+        positionMap[currentPosition].address = entity.value;
+      } else if (type === 'email' && !positionMap[currentPosition].email) {
+        positionMap[currentPosition].email = entity.value;
+      } else if (type === 'dateofbirth' && !positionMap[currentPosition].dateofbirth) {
+        positionMap[currentPosition].dateofbirth = entity.value;
+      } else if (type === 'landline' && !positionMap[currentPosition].landline) {
+        positionMap[currentPosition].landline = entity.value;
+      } else if (type === 'lastseen' && !positionMap[currentPosition].lastseen) {
+        positionMap[currentPosition].lastseen = entity.value;
+      }
     }
-    
-    if (i < mobiles.length) record.mobile = mobiles[i];
-    if (i < addresses.length) record.address = addresses[i];
-    if (i < emails.length) record.email = emails[i];
-    if (i < dobs.length) record.dateofbirth = dobs[i];
-    if (i < landlines.length) record.landline = landlines[i];
-    if (i < lastseens.length) record.lastseen = lastseens[i];
+  });
 
-    if (record.first_name) {
-      records.push(record);
+  // Step 2: Convert position map to records array
+  const records = [];
+  for (const position in positionMap) {
+    const data = positionMap[position];
+    
+    if (data.name) {
+      // ⭐ Parse full name into first and last
+      const { first, last } = parseFullName(data.name);
+      
+      records.push({
+        first_name: first,
+        last_name: last,
+        mobile: data.mobile || '',
+        address: data.address || '',
+        email: data.email || '',
+        dateofbirth: data.dateofbirth || '',
+        landline: data.landline || '',
+        lastseen: data.lastseen || ''
+      });
     }
   }
+
+  console.log(`📋 simpleGrouping: Grouped ${records.length} records from ${entities.length} entities`);
+  
   return records;
 };
-
-
 
 const _single_line_address = (address) => {
   if (!address) return '';
