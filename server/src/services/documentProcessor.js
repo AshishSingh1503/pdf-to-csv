@@ -301,19 +301,12 @@ const extractEntitiesSimple = (document) => {
 
 const simpleGrouping = (entities) => {
   if (!Array.isArray(entities) || entities.length === 0) return [];
+  const ROW_Y_TOLERANCE = 0.01;
 
 
-  // --- Fallback Grouping (Original startIndex logic) ---
-  const fallbackGrouping = () => {
-    console.warn('⚠️ simpleGrouping: Falling back to startIndex-based grouping.');
-    const sorted = [...entities].sort((a, b) => {
-      const aPos = a.startIndex !== null ? a.startIndex : Number.MAX_SAFE_INTEGER;
-      const bPos = b.startIndex !== null ? b.startIndex : Number.MAX_SAFE_INTEGER;
-      if (aPos !== bPos) return aPos - bPos;
-      return (a.__order || 0) - (b.__order || 0);
-    });
-
-
+  const pureStartIndexGrouping = (entitySubset) => {
+    // This is the original fallback logic, to be used when coordinate data is insufficient
+    const sorted = [...entitySubset].sort((a, b) => (a.startIndex ?? a.__order) - (b.startIndex ?? b.__order));
     const nameEntities = sorted.filter(e => e.type === 'name');
     const records = [];
 
@@ -321,14 +314,9 @@ const simpleGrouping = (entities) => {
     for (let i = 0; i < nameEntities.length; i++) {
       const nameEnt = nameEntities[i];
       const nextName = nameEntities[i + 1];
-      const nameStart = nameEnt.startIndex !== null ? nameEnt.startIndex : nameEnt.__order;
-      const boundary = (nextName && nextName.startIndex !== null) ? nextName.startIndex : Number.MAX_SAFE_INTEGER;
-
-
-      const slice = sorted.filter(e => {
-        const pos = (e.startIndex !== null ? e.startIndex : e.__order);
-        return pos >= nameStart && pos < boundary;
-      });
+      const nameStart = nameEnt.startIndex ?? nameEnt.__order;
+      const boundary = nextName?.startIndex ?? Number.MAX_SAFE_INTEGER;
+      const slice = sorted.filter(e => (e.startIndex ?? e.__order) >= nameStart && (e.startIndex ?? e.__order) < boundary);
 
 
       const record = {};
@@ -350,28 +338,27 @@ const simpleGrouping = (entities) => {
   };
 
 
-  // --- Coordinate-based Grouping ---
   const withCoords = entities.filter(e => e.midY !== null && e.midX !== null);
+  const withoutCoords = entities.filter(e => e.midY === null || e.midX === null);
+
+
   if (withCoords.length / entities.length < 0.5) {
-    console.log(`[Diagnostic] Coordinate data found for ${withCoords.length}/${entities.length} entities. Not enough for coordinate-based grouping.`);
-    return fallbackGrouping();
+    console.warn(`[Diagnostic] Insufficient coordinate data. Using pure startIndex grouping.`);
+    return pureStartIndexGrouping(entities);
   }
-  console.log(`[Diagnostic] Using Y-coordinate grouping for ${withCoords.length}/${entities.length} entities.`);
 
 
-  const sorted = withCoords.sort((a, b) => {
-    if (a.midY !== b.midY) return a.midY - b.midY;
-    return a.midX - b.midX;
-  });
+  console.log(`[Diagnostic] Using hybrid coordinate/startIndex grouping.`);
 
 
+  // 1. Form rows from entities that have coordinates
+  const sortedWithCoords = withCoords.sort((a, b) => a.midY - b.midY || a.midX - b.midX);
   const rows = [];
-  if (sorted.length > 0) {
-    let currentRow = [sorted[0]];
-    for (let i = 1; i < sorted.length; i++) {
-      const prev = sorted[i - 1];
-      const curr = sorted[i];
-      if (Math.abs(curr.midY - prev.midY) < 0.01) { // ROW_Y_TOLERANCE
+  if (sortedWithCoords.length > 0) {
+    let currentRow = [sortedWithCoords[0]];
+    for (let i = 1; i < sortedWithCoords.length; i++) {
+      const curr = sortedWithCoords[i];
+      if (Math.abs(curr.midY - currentRow[0].midY) < ROW_Y_TOLERANCE) {
         currentRow.push(curr);
       } else {
         rows.push(currentRow);
@@ -382,7 +369,36 @@ const simpleGrouping = (entities) => {
   }
 
 
-  return rows.map(row => {
+  // 2. Create a map of row boundaries based on startIndex
+  const rowBoundaries = rows.map(row => {
+    const indices = row.map(e => e.startIndex).filter(idx => idx !== null);
+    return {
+      row,
+      minIdx: Math.min(...indices, Number.MAX_SAFE_INTEGER),
+      maxIdx: Math.max(...indices, -1),
+    };
+  });
+
+
+  // 3. Slot entities without coordinates into the coordinate-based rows
+  const unslotted = [];
+  for (const entity of withoutCoords) {
+    if (entity.startIndex === null) {
+      unslotted.push(entity);
+      continue;
+    }
+    const targetRow = rowBoundaries.find(b => entity.startIndex >= b.minIdx && entity.startIndex <= b.maxIdx);
+    if (targetRow) {
+      targetRow.row.push(entity);
+    } else {
+      unslotted.push(entity);
+    }
+  }
+
+
+  // 4. Build records from the completed coordinate-based rows
+  const coordRecords = rows.map(row => {
+    row.sort((a, b) => (a.midX ?? a.startIndex ?? a.__order) - (b.midX ?? b.startIndex ?? b.__order));
     const record = {};
     const nameEntity = row.find(e => e.type === 'name');
     if (nameEntity) {
@@ -390,8 +406,6 @@ const simpleGrouping = (entities) => {
       record.first_name = first;
       record.last_name = last;
     }
-
-
     const getFirst = (type) => row.find(e => e.type === type)?.value;
     record.mobile = getFirst('mobile');
     record.address = getFirst('address');
@@ -400,7 +414,14 @@ const simpleGrouping = (entities) => {
     record.landline = getFirst('landline');
     record.lastseen = getFirst('lastseen');
     return record;
-  }).filter(r => r.first_name);
+  });
+
+
+  // 5. Process any remaining unslotted entities using the original fallback logic
+  const fallbackRecords = pureStartIndexGrouping(unslotted);
+
+
+  return [...coordRecords, ...fallbackRecords];
 };
 
 
