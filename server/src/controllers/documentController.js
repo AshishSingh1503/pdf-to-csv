@@ -72,11 +72,18 @@ const processPDFFilesParallel = async (fileArray, collectionId, fileMetadatas) =
     const processingTimestamp = new Date().toISOString();
 
     // ⭐ OPTIMIZATION: Prepare ALL records at once
-    const allPreProcessRecords = allRawRecords.map((record) => ({
-      collection_id: parseInt(collectionId),
-      ...record,
-      processing_timestamp: processingTimestamp
-    }));
+   const allPreProcessRecords = allRawRecords.map((record) => ({  
+     collection_id: parseInt(collectionId),  
+     full_name: `${record.first_name || ''} ${record.last_name || ''}`.trim(),  
+     mobile: record.mobile,  
+     email: record.email,  
+     address: record.address,  
+     dateofbirth: record.dateofbirth,  
+     landline: record.landline,  
+     lastseen: record.lastseen,  
+     file_name: record.file_name,  
+     processing_timestamp: processingTimestamp  
+   }));
 
     const allPostProcessRecords = allFilteredRecords.map((record) => ({
       collection_id: parseInt(collectionId),
@@ -252,11 +259,18 @@ export const reprocessFile = async (req, res) => {
 
     const processingTimestamp = new Date().toISOString();
 
-    const preProcessRecords = allRawRecords.map(record => ({
-      collection_id: fileMetadata.collection_id,
-      ...record,
-      processing_timestamp: processingTimestamp,
-    }));
+   const preProcessRecords = allRawRecords.map(record => ({  
+     collection_id: fileMetadata.collection_id,  
+     full_name: `${record.first_name || ''} ${record.last_name || ''}`.trim(),  
+     mobile: record.mobile,  
+     email: record.email,  
+     address: record.address,  
+     dateofbirth: record.dateofbirth,  
+     landline: record.landline,  
+     lastseen: record.lastseen,  
+     file_name: record.file_name,  
+     processing_timestamp: processingTimestamp,  
+   }));
 
     const postProcessRecords = allFilteredRecords.map(record => ({
       collection_id: fileMetadata.collection_id,

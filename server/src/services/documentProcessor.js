@@ -1,6 +1,6 @@
 // server/src/services/documentProcessor.js
 import { DocumentProcessorServiceClient } from "@google-cloud/documentai";
-import  Parser from "name-parser";
+import Parser from "name-parser";
 import { config } from "../config/index.js";
 import fs from "fs";
 import path from "path";
@@ -10,6 +10,7 @@ import os from "os";
 import { promises as fsPromises } from "fs";
 // import pkg from 'name-parser';
 // const { Parser } = pkg;
+
 
 
 // --- CONFIGURATION & CONSTANTS ---
@@ -292,6 +293,7 @@ const simpleGrouping = (entities) => {
 
   // If we have positions for at least ~30% of entities, use positional mapping (recommended)
   const USE_POSITION = positionAvailableRatio >= 0.3;
+  // const USE_POSITION = false; // Force index-based grouping
 
   if (!USE_POSITION) {
     console.warn('⚠️ simpleGrouping: insufficient positional anchors — falling back to index-based grouping.');
@@ -394,14 +396,14 @@ const simpleGrouping = (entities) => {
 
 //   for (let i = 0; i < maxCount; i++) {
 //     const record = {};
-    
+
 //     if (i < names.length) {
 //       // ⭐ Use name-parser for accurate first/last name splitting
 //       const { first, last } = parseFullName(names[i]);
 //       record.first_name = first;
 //       record.last_name = last;
 //     }
-    
+
 //     if (i < mobiles.length) record.mobile = mobiles[i];
 //     if (i < addresses.length) record.address = addresses[i];
 //     if (i < emails.length) record.email = emails[i];
@@ -545,9 +547,9 @@ const retryWithBackoff = async (fn, maxRetries = RETRY_ATTEMPTS, initialDelay = 
       activeRequests--;
       lastError = error;
 
-      const isRateLimit = error.code === 429 || 
-                         error.message?.includes('RESOURCE_EXHAUSTED') ||
-                         error.message?.includes('Rate limit');
+      const isRateLimit = error.code === 429 ||
+        error.message?.includes('RESOURCE_EXHAUSTED') ||
+        error.message?.includes('Rate limit');
 
       if (isRateLimit && attempt < maxRetries - 1) {
         const delay = initialDelay * Math.pow(2, attempt);
@@ -855,7 +857,7 @@ export const processPDFs = async (pdfFiles, batchSize = 10, maxWorkers = 4) => {
 
   // ⭐ NEW LOGIC: Scale workers based on file count
   let scaledWorkers = SAFE_MAX_WORKERS;
-  
+
   if (pdfFiles.length === 1) {
     scaledWorkers = 2;
   } else if (pdfFiles.length === 2) {
@@ -873,7 +875,7 @@ export const processPDFs = async (pdfFiles, batchSize = 10, maxWorkers = 4) => {
   console.log(`📊 Processing ${pdfFiles.length} files | Workers: ${scaledWorkers} | Pool: ${workerThreadPool ? WORKER_THREAD_POOL_SIZE : 0} threads`);
   const limit = pLimit(scaledWorkers);  // ⭐ Use dynamic concurrency
   const startTime = Date.now();
-  
+
   try {
     const tempDir = path.join(process.cwd(), "temp");
     if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
@@ -904,7 +906,8 @@ export const processPDFs = async (pdfFiles, batchSize = 10, maxWorkers = 4) => {
 
         // OPTIMIZATION 5: Batch validate records in parallel
         // OPTIMIZATION 5: Batch validate records in parallel
-                const filteredRecordsRaw = await batchValidateRecords(rawRecords, 100);
+        const filteredRecordsRaw = await batchValidateRecords(rawRecords, 100);
+
 
         // 👇 --- ADD THIS DE-DUPLICATION BLOCK --- 👇
         const uniqueRecords = [];
@@ -917,9 +920,24 @@ export const processPDFs = async (pdfFiles, batchSize = 10, maxWorkers = 4) => {
         }
         const filteredRecords = uniqueRecords; // Use the de-duplicated list
         // 👆 --- END OF NEW BLOCK --- 👆
+        console.log('📋 Extracted entities:', JSON.stringify(entities.map(e => ({
+          type: e.type,
+          value: e.value.substring(0, 30),
+          startIndex: e.startIndex
+        })), null, 2));
 
-        rawRecords.forEach(r => r.file_name = file.name);
-        filteredRecords.forEach(r => r.file_name = file.name); // This now uses the unique list
+        const logData = JSON.stringify(entities.map(e => ({
+          type: e.type,
+          value: e.value.substring(0, 30),
+          startIndex: e.startIndex
+        })), null, 2);
+
+        fs.writeFileSync('./entity-debug.json', logData);
+        console.log('✅ Entities written to entity-debug.json');
+
+
+        rawRecords.forEach(r => r.file_name = file.name);
+        filteredRecords.forEach(r => r.file_name = file.name); // This now uses the unique list
 
         // OPTIMIZATION 5: Parallel JSON generation
         const { preProcessingJson, postProcessingJson } = await generateJsonObjects(
@@ -964,22 +982,22 @@ export const processPDFs = async (pdfFiles, batchSize = 10, maxWorkers = 4) => {
     const allRawRecords = results
       .filter(r => !r.error)
       .flatMap(r => r.rawRecords);
-    
+
     const allFilteredRecords = results
       .filter(r => !r.error)
       .flatMap(r => r.filteredRecords);
-    
+
     const allPreProcessingJson = results
       .filter(r => r.preProcessingJson)
       .map(r => r.preProcessingJson);
-    
+
     const allPostProcessingJson = results
       .filter(r => r.postProcessingJson)
       .map(r => r.postProcessingJson);
 
     const processingTime = ((Date.now() - startTime) / 1000).toFixed(2);
-    const successRate = allRawRecords.length > 0 
-      ? `${((allFilteredRecords.length / allRawRecords.length) * 100).toFixed(1)}%` 
+    const successRate = allRawRecords.length > 0
+      ? `${((allFilteredRecords.length / allRawRecords.length) * 100).toFixed(1)}%`
       : "0%";
 
     console.log(`\n⏱️  Processing complete in ${processingTime}s | Success rate: ${successRate}`);
