@@ -150,8 +150,10 @@ const cleanAndValidateRecords = (records, patterns) => {
     // 👆 --- THIS WAS THE BUGGY LINE --- 👆
 
     const landline = isValidLandline(rawLandline, patterns) ? rawLandline.replace(patterns.digitOnly, '') : '';
+    const full_name = `${firstName} ${lastName}`.trim();
 
     cleanRecords.push({
+      full_name: full_name,
       first_name: firstName,
       last_name: lastName,
       dateofbirth: dateofbirth || '',
