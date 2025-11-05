@@ -5,6 +5,7 @@ export class PostProcessRecord {
   constructor(data) {
     this.id = data.id;
     this.collection_id = data.collection_id;
+    this.full_name = data.full_name;
     this.first_name = data.first_name;
     this.last_name = data.last_name;
     this.dateofbirth = data.dateofbirth;
@@ -22,6 +23,7 @@ export class PostProcessRecord {
   static async create(recordData) {
     const {
       collection_id,
+      full_name,
       first_name,
       last_name,
       dateofbirth,
@@ -36,7 +38,7 @@ export class PostProcessRecord {
 
     const result = await query(
       `INSERT INTO post_process_records 
-       (collection_id, first_name, last_name, dateofbirth, address, mobile, email, landline, lastseen, file_name, processing_timestamp)
+       (collection_id, full_name, first_name, last_name, dateofbirth, address, mobile, email, landline, lastseen, file_name, processing_timestamp)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
        RETURNING *`,
       [collection_id, first_name, last_name, dateofbirth, address, mobile, email, landline, lastseen, file_name, processing_timestamp]
@@ -55,6 +57,7 @@ export class PostProcessRecord {
 
     const params = records.flatMap(record => [
       record.collection_id,
+      record.full_name,
       record.first_name,
       record.last_name,
       record.dateofbirth,
@@ -69,7 +72,7 @@ export class PostProcessRecord {
 
     const result = await query(
       `INSERT INTO post_process_records 
-       (collection_id, first_name, last_name, dateofbirth, address, mobile, email, landline, lastseen, file_name, processing_timestamp)
+       (collection_id, full_name, first_name, last_name, dateofbirth, address, mobile, email, landline, lastseen, file_name, processing_timestamp)
        VALUES ${values}
        RETURNING *`,
       params
@@ -120,6 +123,7 @@ export class PostProcessRecord {
     let queryText = `
       SELECT * FROM post_process_records 
       WHERE (
+        LOWER(full_name) LIKE LOWER($1) OR
         LOWER(first_name) LIKE LOWER($1) OR
         LOWER(last_name) LIKE LOWER($1) OR
         LOWER(address) LIKE LOWER($1) OR
@@ -162,6 +166,7 @@ export class PostProcessRecord {
 
     if (searchTerm) {
       queryText += ` ${paramCount > 0 ? 'AND' : 'WHERE'} (
+        LOWER(full_name) LIKE LOWER($${paramCount + 1}) OR
         LOWER(first_name) LIKE LOWER($${paramCount + 1}) OR
         LOWER(last_name) LIKE LOWER($${paramCount + 1}) OR
         LOWER(address) LIKE LOWER($${paramCount + 1}) OR

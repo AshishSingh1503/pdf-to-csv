@@ -775,8 +775,10 @@ const cleanAndValidate = (records) => {
     if (!address || !/\d/.test(address)) continue;
 
     const landline = isValidLandline(rawLandline) ? rawLandline.replace(REGEX_PATTERNS.digitOnly, '') : '';
+    const full_name = `${firstName} ${lastName}`.trim();
 
     cleanRecords.push({
+      full_name: full_name,
       first_name: firstName,
       last_name: lastName,
       dateofbirth: dateofbirth || '',
