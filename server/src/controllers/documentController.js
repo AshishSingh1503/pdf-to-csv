@@ -88,6 +88,7 @@ const processPDFFilesParallel = async (fileArray, collectionId, fileMetadatas) =
     const allPostProcessRecords = allFilteredRecords.map((record) => ({
       collection_id: parseInt(collectionId),
       ...record,
+      full_name: `${record.first_name || ''} ${record.last_name || ''}`.trim(),
       processing_timestamp: processingTimestamp
     }));
 
@@ -275,6 +276,7 @@ export const reprocessFile = async (req, res) => {
     const postProcessRecords = allFilteredRecords.map(record => ({
       collection_id: fileMetadata.collection_id,
       ...record,
+      full_name: `${record.first_name || ''} ${record.last_name || ''}`.trim(),
       processing_timestamp: processingTimestamp,
     }));
 

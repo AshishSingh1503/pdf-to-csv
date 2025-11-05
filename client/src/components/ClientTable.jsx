@@ -18,6 +18,7 @@ const ClientTable = ({ data, isPostProcess, sortField, sortDirection, onSort }) 
   const getSortableField = (displayField) => {
     // Map display fields to actual data fields
     if (isPostProcess) {
+      if (displayField === 'FULL NAME') return 'full_name';
       if (displayField === 'FIRST') return 'first';
       if (displayField === 'LAST') return 'last';
     } else {
@@ -39,7 +40,16 @@ const ClientTable = ({ data, isPostProcess, sortField, sortDirection, onSort }) 
           <tr>
             {isPostProcess ? (
               <>
-                <th 
+                <th
+                  className="py-2 px-4 border-b cursor-pointer hover:bg-gray-50 select-none"
+                  onClick={() => onSort('full_name')}
+                >
+                  <div className="flex items-center justify-between">
+                    FULL NAME
+                    {getSortIcon('full_name')}
+                  </div>
+                </th>
+                <th
                   className="py-2 px-4 border-b cursor-pointer hover:bg-gray-50 select-none"
                   onClick={() => onSort('first')}
                 >
@@ -48,7 +58,7 @@ const ClientTable = ({ data, isPostProcess, sortField, sortDirection, onSort }) 
                     {getSortIcon('first')}
                   </div>
                 </th>
-                <th 
+                <th
                   className="py-2 px-4 border-b cursor-pointer hover:bg-gray-50 select-none"
                   onClick={() => onSort('last')}
                 >
@@ -59,7 +69,7 @@ const ClientTable = ({ data, isPostProcess, sortField, sortDirection, onSort }) 
                 </th>
               </>
             ) : (
-              <th 
+              <th
                 className="py-2 px-4 border-b cursor-pointer hover:bg-gray-50 select-none"
                 onClick={() => onSort('full_name')}
               >
@@ -134,6 +144,7 @@ const ClientTable = ({ data, isPostProcess, sortField, sortDirection, onSort }) 
             <tr key={index}>
               {isPostProcess ? (
                 <>
+                  <td className="py-2 px-4 border-b">{client.full_name || ''}</td>
                   <td className="py-2 px-4 border-b">{client.first || ''}</td>
                   <td className="py-2 px-4 border-b">{client.last || ''}</td>
                 </>

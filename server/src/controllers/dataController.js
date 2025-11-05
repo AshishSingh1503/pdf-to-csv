@@ -69,6 +69,7 @@ export const getPostProcessData = async (req, res) => {
     // Format data for frontend
     const formattedRecords = records.map(record => ({
       id: record.id,
+      full_name: record.full_name,
       first: record.first_name,
       last: record.last_name,
       mobile: record.mobile,
@@ -129,6 +130,7 @@ export const searchData = async (req, res) => {
       const postRecords = await PostProcessRecord.search(searchTerm, collectionId, parseInt(limit), offset);
       results.postProcess = postRecords.map(record => ({
         id: record.id,
+        full_name: record.full_name,
         first: record.first_name,
         last: record.last_name,
         mobile: record.mobile,

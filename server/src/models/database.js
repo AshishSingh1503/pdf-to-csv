@@ -105,6 +105,7 @@ export const initializeDatabase = async () => {
       CREATE TABLE IF NOT EXISTS post_process_records (
         id SERIAL PRIMARY KEY,
         collection_id INTEGER REFERENCES collections(id) ON DELETE CASCADE,
+        full_name VARCHAR(255),
         first_name VARCHAR(255),
         last_name VARCHAR(255),
         mobile VARCHAR(100), -- increased from 20 to 100
@@ -137,6 +138,12 @@ export const initializeDatabase = async () => {
     await query(`
       ALTER TABLE file_metadata
       ADD COLUMN IF NOT EXISTS upload_progress INTEGER DEFAULT 0
+    `);
+
+    // Add full_name column to post_process_records if it doesn't exist
+    await query(`
+      ALTER TABLE post_process_records
+      ADD COLUMN IF NOT EXISTS full_name VARCHAR(255)
     `);
 
     // ✅ Ensure existing columns have correct sizes

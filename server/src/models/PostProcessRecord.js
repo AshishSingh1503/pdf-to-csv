@@ -39,9 +39,9 @@ export class PostProcessRecord {
     const result = await query(
       `INSERT INTO post_process_records 
        (collection_id, full_name, first_name, last_name, dateofbirth, address, mobile, email, landline, lastseen, file_name, processing_timestamp)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
        RETURNING *`,
-      [collection_id, first_name, last_name, dateofbirth, address, mobile, email, landline, lastseen, file_name, processing_timestamp]
+      [collection_id, full_name, first_name, last_name, dateofbirth, address, mobile, email, landline, lastseen, file_name, processing_timestamp]
     );
     return new PostProcessRecord(result.rows[0]);
   }
@@ -51,8 +51,8 @@ export class PostProcessRecord {
     if (records.length === 0) return [];
 
     const values = records.map((record, index) => {
-      const baseIndex = index * 11;
-      return `($${baseIndex + 1}, $${baseIndex + 2}, $${baseIndex + 3}, $${baseIndex + 4}, $${baseIndex + 5}, $${baseIndex + 6}, $${baseIndex + 7}, $${baseIndex + 8}, $${baseIndex + 9}, $${baseIndex + 10}, $${baseIndex + 11})`;
+      const baseIndex = index * 12;
+      return `($${baseIndex + 1}, $${baseIndex + 2}, $${baseIndex + 3}, $${baseIndex + 4}, $${baseIndex + 5}, $${baseIndex + 6}, $${baseIndex + 7}, $${baseIndex + 8}, $${baseIndex + 9}, $${baseIndex + 10}, $${baseIndex + 11}, $${baseIndex + 12})`;
     }).join(', ');
 
     const params = records.flatMap(record => [
@@ -67,7 +67,7 @@ export class PostProcessRecord {
       record.landline,
       record.lastseen,
       record.file_name,
-      record.processing_timestamp
+      record.processing_timestamp,
     ]);
 
     const result = await query(
