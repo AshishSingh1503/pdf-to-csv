@@ -5,6 +5,7 @@ import path from "path";
 import { processPDFs } from "../services/documentProcessor.js";
 import { PreProcessRecord } from "../models/PreProcessRecord.js";
 import { PostProcessRecord } from "../models/PostProcessRecord.js";
+import { RemovedRecord } from "../models/RemovedRecord.js";
 import { FileMetadata } from "../models/FileMetadata.js";
 import { CloudStorageService } from "../services/cloudStorage.js";
 import { Collection } from "../models/Collection.js";
@@ -66,7 +67,7 @@ const processPDFFilesParallel = async (fileArray, collectionId, fileMetadatas) =
     console.log(`📊 Starting parallel processing for ${fileArray.length} files...`);
 
     // STEP 1: Process ALL files at once with high concurrency
-    const { allRawRecords, allFilteredRecords } = 
+    const { allRawRecords, allFilteredRecords, allRemovedRecords } = 
       await processPDFs(fileArray, 10, 4);
 
     const processingTimestamp = new Date().toISOString();
@@ -92,16 +93,25 @@ const processPDFFilesParallel = async (fileArray, collectionId, fileMetadatas) =
       processing_timestamp: processingTimestamp
     }));
 
+    const allRemovedRecordsForDB = (allRemovedRecords || []).map((record) => ({
+      collection_id: parseInt(collectionId),
+      full_name: record.full_name,
+      file_name: record.file_name,
+      rejection_reason: record.rejection_reason,
+      processing_timestamp: processingTimestamp
+    }));
+
     console.log(`📦 Prepared: ${allPreProcessRecords.length} pre + ${allPostProcessRecords.length} post records`);
 
     // ⭐ KEY OPTIMIZATION: Insert ALL at once (uses only 2 connections!)
     console.log(`💾 Inserting into database...`);
-    const [insertedPre, insertedPost] = await Promise.all([
+    const [insertedPre, insertedPost, insertedRemoved] = await Promise.all([
       PreProcessRecord.bulkCreate(allPreProcessRecords),
       PostProcessRecord.bulkCreate(allPostProcessRecords),
+      RemovedRecord.bulkCreate(allRemovedRecordsForDB),
     ]);
 
-    console.log(`✅ Inserted: ${insertedPre.length} pre, ${insertedPost.length} post records`);
+    console.log(`✅ Inserted: ${insertedPre.length} pre, ${insertedPost.length} post, ${insertedRemoved.length} removed records`);
 
     // STEP 2: Update file metadata in parallel
     const updatePromises = fileMetadatas.map(async (metadata) => {
@@ -253,10 +263,12 @@ export const reprocessFile = async (req, res) => {
     const {
       allRawRecords,
       allFilteredRecords,
+      allRemovedRecords
     } = await processPDFs([file]);
 
     await PreProcessRecord.deleteByFileName(fileMetadata.original_filename);
     await PostProcessRecord.deleteByFileName(fileMetadata.original_filename);
+    await RemovedRecord.deleteByFileName(fileMetadata.original_filename);
 
     const processingTimestamp = new Date().toISOString();
 
@@ -280,8 +292,19 @@ export const reprocessFile = async (req, res) => {
       processing_timestamp: processingTimestamp,
     }));
 
-    await PreProcessRecord.bulkCreate(preProcessRecords);
-    await PostProcessRecord.bulkCreate(postProcessRecords);
+    const removedRecords = (allRemovedRecords || []).map(record => ({
+      collection_id: fileMetadata.collection_id,
+      full_name: record.full_name,
+      file_name: record.file_name,
+      rejection_reason: record.rejection_reason,
+      processing_timestamp: processingTimestamp,
+    }));
+
+    await Promise.all([
+      PreProcessRecord.bulkCreate(preProcessRecords),
+      PostProcessRecord.bulkCreate(postProcessRecords),
+      RemovedRecord.bulkCreate(removedRecords),
+    ]);
 
     await fileMetadata.updateStatus('completed');
 
@@ -422,6 +445,104 @@ const downloadCollectionFile = async (req, res, fileType) => {
 // Export functions that call this
 export const downloadCollectionCsvs = (req, res) => downloadCollectionFile(req, res, 'csv');
 export const downloadCollectionExcels = (req, res) => downloadCollectionFile(req, res, 'xlsx');
+
+export const downloadCollectionSummary = async (req, res) => {
+  try {
+    const { collectionId } = req.params;
+
+    const collection = await Collection.findById(collectionId);
+    if (!collection) {
+      return res.status(404).json({ error: "Collection not found" });
+    }
+
+    // Query counts in parallel
+    const [totalCount, filteredCount, removedCount] = await Promise.all([
+      PreProcessRecord.count(collectionId),
+      PostProcessRecord.count(collectionId),
+      RemovedRecord.count(collectionId),
+    ]);
+
+    // Fetch removed records details
+    const removedRecords = await RemovedRecord.findAll(collectionId);
+
+    // Build text content
+    const lines = [];
+    lines.push(`Total Records: ${totalCount}`);
+    lines.push(`Filtered Records: ${filteredCount}`);
+    lines.push(`Removed Records: ${removedCount}`);
+    lines.push('');
+    lines.push('Removed Records Details:');
+    lines.push('ID, Name, Filename, Reason');
+
+    for (const record of removedRecords) {
+      lines.push(`${record.id}, ${record.full_name || ''}, ${record.file_name || ''}, ${record.rejection_reason || ''}`);
+    }
+
+    const textContent = lines.join('\n');
+
+    const tempDir = path.join(process.cwd(), "temp", `collection-${collectionId}`);
+    if (!fs.existsSync(tempDir)) {
+      fs.mkdirSync(tempDir, { recursive: true });
+    }
+
+    // Use a unique temp filename to avoid race conditions
+    const uniqueSuffix = Date.now();
+    const fileName = `summary-${uniqueSuffix}.txt`;
+    const filePath = path.join(tempDir, fileName);
+
+    // Helper to escape CSV-like fields and normalize newlines
+    const escapeField = (val) => {
+      if (val === null || val === undefined) return '""';
+      let s = String(val);
+      // normalize newlines to a single space
+      s = s.replace(/\r\n|\r|\n/g, ' ');
+      // escape double quotes by doubling them
+      s = s.replace(/"/g, '""');
+      return `"${s}"`;
+    };
+
+    // Rebuild lines with escaped fields for removed records
+    const headerLines = [];
+    headerLines.push(`Total Records: ${totalCount}`);
+    headerLines.push(`Filtered Records: ${filteredCount}`);
+    headerLines.push(`Removed Records: ${removedCount}`);
+    headerLines.push('');
+    headerLines.push('Removed Records Details:');
+    headerLines.push('ID, Name, Filename, Reason');
+
+    const recordLines = (removedRecords || []).map(record => {
+      const id = escapeField(record.id);
+      const name = escapeField(record.full_name || '');
+      const fname = escapeField(record.file_name || '');
+      const reason = escapeField(record.rejection_reason || '');
+      return `${id}, ${name}, ${fname}, ${reason}`;
+    });
+
+    const finalText = [...headerLines, ...recordLines].join('\n');
+
+    // Write file asynchronously to avoid blocking the event loop
+    await fs.promises.writeFile(filePath, finalText, 'utf8');
+
+    res.download(filePath, `${collection.name}-summary.txt`, (err) => {
+      if (err) {
+        console.error("🔥 Error downloading summary file:", err.message);
+      } else {
+        console.log(`✅ Downloaded ${fileName}`);
+      }
+
+      // Cleanup the uniquely named temp file
+      try {
+        fs.unlinkSync(filePath);
+      } catch (cleanupErr) {
+        console.warn(`⚠️  Cleanup error: ${cleanupErr.message}`);
+      }
+    });
+
+  } catch (err) {
+    console.error(`🔥 Error in downloadCollectionSummary:`, err);
+    res.status(500).json({ error: err.message });
+  }
+};
 
 
 export const getUploadedFiles = async (req, res) => {

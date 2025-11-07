@@ -111,6 +111,7 @@ const isValidLandline = (landline, patterns) => {
 
 const cleanAndValidateRecords = (records, patterns) => {
   const cleanRecords = [];
+  const rejectedRecords = [];
 
   for (const record of records) {
     // Use String() for safety, handles null/undefined
@@ -135,19 +136,56 @@ const cleanAndValidateRecords = (records, patterns) => {
     // --- VALIDATION RULES ---
 
     // Rule 1: Must have a valid name
-    if (!firstName || firstName.length <= 1) continue;
+    if (!firstName || firstName.length <= 1) {
+      rejectedRecords.push({
+        first_name: firstName,
+        last_name: lastName,
+        mobile,
+        address,
+        email,
+        dateofbirth,
+        landline: rawLandline,
+        lastseen,
+        rejection_reason: 'Invalid first name (single character)'
+      });
+      continue;
+    }
 
     // Rule 2: Must have a mobile
-    if (!mobile) continue;
+    if (!mobile) {
+      rejectedRecords.push({
+        first_name: firstName,
+        last_name: lastName,
+        mobile,
+        address,
+        email,
+        dateofbirth,
+        landline: rawLandline,
+        lastseen,
+        rejection_reason: 'Missing mobile number'
+      });
+      continue;
+    }
 
     // Rule 3: Mobile must be a valid 10-digit AU number
     const mobileDigits = mobile.replace(patterns.digitOnly, '');
-    if (!(mobileDigits.length === 10 && mobileDigits.startsWith('04'))) continue;
+    if (!(mobileDigits.length === 10 && mobileDigits.startsWith('04'))) {
+      rejectedRecords.push({
+        first_name: firstName,
+        last_name: lastName,
+        mobile,
+        address,
+        email,
+        dateofbirth,
+        landline: rawLandline,
+        lastseen,
+        rejection_reason: 'Invalid mobile number'
+      });
+      continue;
+    }
 
     // Rule 4: Address must exist and contain at least one number *anywhere*
-    // 👇 --- THIS IS THE FIX --- 👇
-    //if (!address || !/\d/.test(address)) continue;
-    // 👆 --- THIS WAS THE BUGGY LINE --- 👆
+    // NOTE: worker does not enforce deduplication
 
     const landline = isValidLandline(rawLandline, patterns) ? rawLandline.replace(patterns.digitOnly, '') : '';
     const full_name = `${firstName} ${lastName}`.trim();
@@ -167,7 +205,7 @@ const cleanAndValidateRecords = (records, patterns) => {
 
   // NOTE: De-duplication will be handled in the main thread
   // after all worker batches are combined.
-  return cleanRecords;
+  return { validRecords: cleanRecords, rejectedRecords };
 };
 
 // --- Worker Message Handler ---
@@ -175,9 +213,9 @@ const cleanAndValidateRecords = (records, patterns) => {
 self.onmessage = ({ data }) => {
   try {
     if (data.type === 'validate') {
-      const filteredRecords = cleanAndValidateRecords(data.records, data.patterns);
-      // Send the filtered (but not yet unique) records back
-      self.postMessage(filteredRecords);
+      const result = cleanAndValidateRecords(data.records, data.patterns);
+      // Send the filtered (but not yet unique) records back with rejected records
+      self.postMessage(result);
     }
   } catch (error) {
     self.postMessage({ error: error.message, stack: error.stack });
