@@ -174,20 +174,6 @@ class WorkerThreadPool {
 }
 
 
-
-// --- Helper Functions ---
-
-
-// const extractEntitiesSimple = (document) => {
-//   return document.entities?.map(entity => ({
-//     type: entity.type?.toLowerCase().trim(),
-//     value: entity.mentionText?.trim(),
-//   })) || [];
-// };
-
-
-
-// ⭐ UPDATED: Use name-parser library for accurate name splitting
 const parseFullName = (fullName) => {
   if (!fullName) return { first: '', last: '' };
 
@@ -229,13 +215,6 @@ const parseFullName = (fullName) => {
   }
 };
 
-// --- Replace extractEntitiesSimple and simpleGrouping with this improved version ---
-
-/**
- * extractEntitiesSimple
- * - returns entities with type, value, and best-effort startIndex/endIndex (numbers)
- * - falls back to using the entity order index if textAnchor is not present
- */
 const extractEntitiesSimple = (document) => {
   const raw = document.entities || [];
   return raw.map((entity, idx) => {
@@ -421,7 +400,6 @@ const simpleGrouping = (entities) => {
 };
 
 
-
 const _single_line_address = (address) => {
   if (!address) return '';
   let s = address.replace(/\r/g, ' ').replace(/\n/g, ' ');
@@ -430,9 +408,6 @@ const _single_line_address = (address) => {
   s = s.endsWith('.') ? s.slice(0, -1) : s;
   return s;
 }
-
-
-
 
 
 const cleanName = (name) => {
@@ -445,7 +420,6 @@ const cleanName = (name) => {
   const parts = s ? s.split(' ').map(p => p.charAt(0).toUpperCase() + p.slice(1)) : [];
   return parts.join(' ').trim();
 };
-
 
 
 const normalizeDateField = (dateStr) => {
@@ -483,8 +457,51 @@ const isValidLandline = (landline) => {
 };
 
 
+const generateSummaryTextFile = (summary, discardedRecords) => {
+  let content = "File Processing Summary\n";
+  content += "=========================\n\n";
+  content += `Total Records (Raw):     ${summary.totalRawRecords}\n`;
+  content += `Filtered Records (Good): ${summary.totalFilteredRecords}\n`;
+  content += `Discarded Records:       ${summary.totalDiscardedRecords}\n`;
+  content += `Success Rate:            ${summary.successRate}\n`;
+  content += `Processing Time:         ${summary.processingTimeSeconds}s\n\n`;
+  
+  content += "=========================\n";
+  content += "Discarded Records Details\n";
+  content += "=========================\n\n";
 
-// --- OPTIMIZATION 4: Exponential Backoff with Rate Limit Checking ---
+  if (discardedRecords.length === 0) {
+    content += "No records were discarded.\n";
+    return content;
+  }
+
+  // Group by reason to make it readable
+  const discardsByReason = discardedRecords.reduce((acc, { record, reason }) => {
+    if (!acc[reason]) {
+      acc[reason] = [];
+    }
+    acc[reason].push(record);
+    return acc;
+  }, {});
+
+  for (const reason in discardsByReason) {
+    const records = discardsByReason[reason];
+    content += `Reason: ${reason} (Count: ${records.length})\n`;
+    content += "---------------------------------------\n";
+    records.forEach((record) => {
+      // Show minimal info to identify the record
+      const name = `${record.first_name || ''} ${record.last_name || ''}`.trim() || 'No Name';
+      const mobile = record.mobile || 'No Mobile';
+      const file = record.file_name || 'N/A';
+      content += `  - [File: ${file}] ${name}, ${mobile}\n`;
+    });
+    content += "\n";
+  }
+
+  return content;
+};
+
+// --- OPTIMIZATION: Exponential Backoff with Rate Limit Checking ---
 const retryWithBackoff = async (fn, maxRetries = RETRY_ATTEMPTS, initialDelay = INITIAL_BACKOFF_MS) => {
   let lastError;
 
@@ -527,9 +544,7 @@ const retryWithBackoff = async (fn, maxRetries = RETRY_ATTEMPTS, initialDelay = 
   throw lastError;
 };
 
-
-
-// --- OPTIMIZATION 2: Batch Database Inserts ---
+// --- OPTIMIZATION: Batch Database Inserts ---
 export const batchInsertRecords = async (records, dbClient, batchSize = BATCH_SIZE_RECORDS) => {
   if (!records || records.length === 0) {
     console.log('⚠️  No records to insert');
@@ -563,9 +578,7 @@ export const batchInsertRecords = async (records, dbClient, batchSize = BATCH_SI
   }
 };
 
-
-
-// --- OPTIMIZATION 3 & 7: Async File Operations ---
+// --- OPTIMIZATION: Async File Operations ---
 const readFileBuffered = async (tempPath) => {
   try {
     return await fsPromises.readFile(tempPath);
@@ -574,7 +587,6 @@ const readFileBuffered = async (tempPath) => {
     throw error;
   }
 };
-
 
 
 const cleanupTempFile = async (tempPath) => {
@@ -590,7 +602,7 @@ const cleanupTempFile = async (tempPath) => {
 
 
 
-// --- OPTIMIZATION 5: Parallel JSON Generation ---
+// --- OPTIMIZATION : Parallel JSON Generation ---
 const generateJsonObjects = async (rawRecords, filteredRecords, entities, rawText, fileName) => {
   const [preProcessingJson, postProcessingJson] = await Promise.all([
     // Pre-processing JSON
@@ -656,8 +668,7 @@ const generateJsonObjects = async (rawRecords, filteredRecords, entities, rawTex
 };
 
 
-
-// --- OPTIMIZATION 5: Batch Record Processing in Parallel ---
+// --- OPTIMIZATION : Batch Record Processing in Parallel ---
 const batchValidateRecords = async (records, batchSize = 100) => {
   // ✅ PRE-NORMALIZE addresses (and trim strings) BEFORE any validation/worker
   const prepped = records.map(r => ({
@@ -670,11 +681,12 @@ const batchValidateRecords = async (records, batchSize = 100) => {
     email: String(r.email ?? '').trim(),
     landline: String(r.landline ?? '').trim(),
     // 👇 ensure address is reordered before any “starts-with-number” checks
-    address: _single_line_address(String(r.address ?? '').trim()),
+    address: fixAddressOrdering(String(r.address ?? '').trim()),
   }));
 
   if (prepped.length <= batchSize || !workerThreadPool) {
     // Fall back to main thread validation if too small or no worker pool
+    // This call now correctly returns { good: [...], bad: [...] }
     return cleanAndValidate(prepped);
   }
 
@@ -684,6 +696,7 @@ const batchValidateRecords = async (records, batchSize = 100) => {
   }
 
   try {
+    // validatedBatches will be an array of: [{ good: [], bad: [] }, { good: [], bad: [] }, ...]
     const validatedBatches = await Promise.all(
       batches.map(batch =>
         workerThreadPool.runTask({
@@ -695,18 +708,22 @@ const batchValidateRecords = async (records, batchSize = 100) => {
       )
     );
 
-    return validatedBatches.flat();
+    // --- NEW: Aggregate good and bad results from all batches ---
+    const allGood = validatedBatches.map(result => result.good).flat();
+    const allBad = validatedBatches.map(result => result.bad).flat();
+
+    return { good: allGood, bad: allBad };
+
   } catch (error) {
     console.warn(`⚠️  Worker thread validation failed, falling back to main thread:`, error.message);
+    // Fallback also correctly returns { good: [...], bad: [...] }
     return cleanAndValidate(prepped);
   }
 };
 
-
-
-// ⭐ UPDATED: Use safe String().trim() for all field access
 const cleanAndValidate = (records) => {
   const cleanRecords = [];
+  const discardedRecords = [];
 
   for (const record of records) {
     // ⭐ Use String() to safely convert any type to string before trim()
@@ -723,17 +740,26 @@ const cleanAndValidate = (records) => {
     const email = String(record.email || '').trim();
     const rawLandline = String(record.landline || '').trim();
 
-    address = _single_line_address(address);
+    address = fixAddressOrdering(address);
 
 
     const dateofbirth = normalizeDateField(rawDob);
     const lastseen = normalizeDateField(rawLastseen);
 
-    if (!firstName || firstName.length <= 1) continue;
-    if (!mobile) continue;
+    if (!firstName || firstName.length <= 1) {
+      discardedRecords.push({ record, reason: 'Invalid or missing first name' });
+      continue;
+    }
+    if (!mobile) {
+      discardedRecords.push({ record, reason: 'Missing mobile number' });
+      continue;
+    }
 
     const mobileDigits = mobile.replace(REGEX_PATTERNS.digitOnly, '');
-    if (!(mobileDigits.length === 10 && mobileDigits.startsWith('04'))) continue;
+    if (!(mobileDigits.length === 10 && mobileDigits.startsWith('04'))) {
+      discardedRecords.push({ record, reason: 'Invalid mobile (must be 10 digits starting with 04)' });
+      continue;
+    }
 
     const landline = isValidLandline(rawLandline) ? rawLandline.replace(REGEX_PATTERNS.digitOnly, '') : '';
     const full_name = `${firstName} ${lastName}`.trim();
@@ -752,7 +778,7 @@ const cleanAndValidate = (records) => {
   }
 
   // De-duplication has been moved to processPDFs
-  return cleanRecords;
+  return { good: cleanRecords, bad: discardedRecords };
 };
 
 
@@ -869,20 +895,34 @@ export const processPDFs = async (pdfFiles, batchSize = 10, maxWorkers = 4) => {
 
         // OPTIMIZATION 5: Batch validate records in parallel
         // OPTIMIZATION 5: Batch validate records in parallel
-        const filteredRecordsRaw = await batchValidateRecords(rawRecords, 100);
+        const validationResult = await batchValidateRecords(rawRecords, 100);
+        const filteredRecordsRaw = validationResult.good;
+        const validationDiscards = validationResult.bad; // <
 
 
-        // 👇 --- ADD THIS DE-DUPLICATION BLOCK --- 👇
         const uniqueRecords = [];
         const seenMobiles = new Set();
+        const deduplicationDiscards = []; // <-- Capture de-dupe discards
+
         for (const record of filteredRecordsRaw) {
           if (!seenMobiles.has(record.mobile)) {
             uniqueRecords.push(record);
             seenMobiles.add(record.mobile);
+          } else {
+            // Capture the duplicate record and its reason
+            deduplicationDiscards.push({ record, reason: 'Duplicate mobile number' });
           }
         }
-        const filteredRecords = uniqueRecords; // Use the de-duplicated list
-        // 👆 --- END OF NEW BLOCK --- 👆
+        const filteredRecords = uniqueRecords; // This is the final good list
+        
+        // Combine all discarded records for this file
+        const allFileDiscards = [
+          ...validationDiscards,
+          ...deduplicationDiscards
+        ];
+        console.log('📋 Validation discards:', JSON.stringify(validationDiscards, null, 2));
+        console.log('📋 Deduplication discards:', JSON.stringify(deduplicationDiscards, null, 2));
+        console.log('📋 All file discards:', JSON.stringify(allFileDiscards, null, 2));
         console.log('📋 Extracted entities:', JSON.stringify(entities.map(e => ({
           type: e.type,
           value: e.value.substring(0, 30),
@@ -916,6 +956,7 @@ export const processPDFs = async (pdfFiles, batchSize = 10, maxWorkers = 4) => {
         return {
           rawRecords,
           filteredRecords,
+          discardedRecords: allFileDiscards,
           preProcessingJson,
           postProcessingJson,
         };
@@ -924,6 +965,7 @@ export const processPDFs = async (pdfFiles, batchSize = 10, maxWorkers = 4) => {
         return {
           rawRecords: [],
           filteredRecords: [],
+          discardedRecords: [], // <-- Add this for error case
           preProcessingJson: null,
           postProcessingJson: null,
           error: fileError.message
@@ -959,23 +1001,42 @@ export const processPDFs = async (pdfFiles, batchSize = 10, maxWorkers = 4) => {
       .map(r => r.postProcessingJson);
 
     const processingTime = ((Date.now() - startTime) / 1000).toFixed(2);
+    const totalRaw = allRawRecords.length;
+    const totalFiltered = allFilteredRecords.length;
+    const totalDiscarded = allDiscardedRecords.length;
+
     const successRate = allRawRecords.length > 0
       ? `${((allFilteredRecords.length / allRawRecords.length) * 100).toFixed(1)}%`
       : "0%";
 
-    console.log(`\n⏱️  Processing complete in ${processingTime}s | Success rate: ${successRate}`);
+      console.log(`\n⏱️  Processing complete in ${processingTime}s`);
+      console.log(`  - Total Raw Records:     ${totalRaw}`);
+      console.log(`  - Total Filtered (Good): ${totalFiltered}`);
+      console.log(`  - Total Discarded:       ${totalDiscarded}`);
+      console.log(`  - Success Rate:          ${successRate}`);
+
+      const summary = {
+        totalRawRecords: totalRaw,
+        totalFilteredRecords: totalFiltered,
+        totalDiscardedRecords: totalDiscarded,
+        successRate: successRate,
+        processingTimeSeconds: parseFloat(processingTime)
+      };
+      const summaryText = generateSummaryTextFile(summary, allDiscardedRecords);
 
     // PITFALL FIX: Cleanup worker pool after batch
     if (workerThreadPool && pdfFiles.length >= 10 && activeRequests === 0) {
       // Keep pool alive for reuse
       console.log('🧵 Worker pool ready for reuse');
     }
-
     return {
       allRawRecords,
       allFilteredRecords,
+      allDiscardedRecords, // <-- Added
       allPreProcessingJson,
       allPostProcessingJson,
+      summary: summary, // <-- Added
+      summaryText: summaryText // <-- Added
     };
   } catch (error) {
     console.error("Error in processPDFs:", error);
