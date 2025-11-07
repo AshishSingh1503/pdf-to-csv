@@ -12,6 +12,44 @@ const _single_line_address = (address, patterns) => {
   return s;
 }
 
+const fixAddressOrdering = (address, patterns) => {
+  if (!address) return address;
+
+  let s = _single_line_address(address, patterns).trim();
+  let match;
+
+  match = s.match(patterns.addressStatePostcodeStart);
+  if (match) {
+    const [, state, postcode, rest] = match;
+    const out = `${rest.trim()} ${state.toUpperCase()} ${postcode}`;
+    return out.replace(patterns.whitespaceMultiple, ' ').trim();
+  }
+
+  match = s.match(patterns.addressPostcodeStateEnd);
+  if (match) {
+    const [, postcode, rest, state] = match;
+    const out = `${rest.trim()} ${state.toUpperCase()} ${postcode}`;
+    return out.replace(patterns.whitespaceMultiple, ' ').trim();
+  }
+
+  match = s.match(patterns.addressStatePostcodeMiddle);
+  if (match) {
+    const [, part1, state, postcode, part2] = match;
+    const out = `${part1.trim()} ${part2.trim()} ${state.toUpperCase()} ${postcode}`;
+    return out.replace(patterns.whitespaceMultiple, ' ').trim();
+  }
+
+  match = s.match(patterns.addressStatePostcodeAny);
+  if (match) {
+    const state = match[1].toUpperCase();
+    const postcode = match[2];
+    const rest = (s.substring(0, match.index) + s.substring(match.index + match[0].length)).trim();
+    const out = `${rest.replace(patterns.whitespaceMultiple, ' ')} ${state} ${postcode}`;
+    return out.trim();
+  }
+
+  return s;
+};
 
 const cleanName = (name, patterns) => {
   if (!name) return '';
@@ -89,8 +127,7 @@ const cleanAndValidateRecords = (records, patterns) => {
     const email = String(record.email || '').trim();
     const rawLandline = String(record.landline || '').trim();
 
-    address = _single_line_address(address);
-
+    address = fixAddressOrdering(address, patterns);
 
     const dateofbirth = normalizeDateField(rawDob, patterns);
     const lastseen = normalizeDateField(rawLastseen, patterns);

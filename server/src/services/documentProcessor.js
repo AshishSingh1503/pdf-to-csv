@@ -45,6 +45,10 @@ try {
 
 // --- OPTIMIZATION 6: Pre-compiled Regex Patterns ---
 const REGEX_PATTERNS = {
+  addressStatePostcodeStart: /^\s*([A-Za-z]{2,3})\s+(\d{4})\s+(.+)$/i,
+  addressPostcodeStateEnd: /^\s*(\d{4})\s+(.+?)\s+([A-Za-z]{2,3})\s*$/i,
+  addressStatePostcodeMiddle: /^(.+?)\s+([A-Za-z]{2,3})\s+(\d{4})\s+(.+)$/i,
+  addressStatePostcodeAny: /([A-Za-z]{2,3})\s+(\d{4})/i,
   nameInvalidChars: /[^A-Za-zÀ-ÖØ-öø-ÿ'\-\s]/g,
   nameSpecialChars: /�|･･･|…|•|\u2026/g,
   dateInvalidChars: /[^0-9A-Za-z\s\-\/]/g,
@@ -422,6 +426,44 @@ const simpleGrouping = (entities) => {
 
 
 
+// const simpleGrouping = (entities) => {
+//   const records = [];
+//   const names = entities.filter(e => e.type === 'name').map(e => e.value);
+//   const mobiles = entities.filter(e => e.type === 'mobile').map(e => e.value);
+//   const addresses = entities.filter(e => e.type === 'address').map(e => e.value);
+//   const emails = entities.filter(e => e.type === 'email').map(e => e.value);
+//   const dobs = entities.filter(e => e.type === 'dateofbirth').map(e => e.value);
+//   const landlines = entities.filter(e => e.type === 'landline').map(e => e.value);
+//   const lastseens = entities.filter(e => e.type === 'lastseen').map(e => e.value);
+
+//   const maxCount = Math.max(names.length, mobiles.length, addresses.length, emails.length, dobs.length, landlines.length, lastseens.length);
+
+//   for (let i = 0; i < maxCount; i++) {
+//     const record = {};
+
+//     if (i < names.length) {
+//       // ⭐ Use name-parser for accurate first/last name splitting
+//       const { first, last } = parseFullName(names[i]);
+//       record.first_name = first;
+//       record.last_name = last;
+//     }
+
+//     if (i < mobiles.length) record.mobile = mobiles[i];
+//     if (i < addresses.length) record.address = addresses[i];
+//     if (i < emails.length) record.email = emails[i];
+//     if (i < dobs.length) record.dateofbirth = dobs[i];
+//     if (i < landlines.length) record.landline = landlines[i];
+//     if (i < lastseens.length) record.lastseen = lastseens[i];
+
+//     if (record.first_name) {
+//       records.push(record);
+//     }
+//   }
+//   return records;
+// };
+
+
+
 const _single_line_address = (address) => {
   if (!address) return '';
   let s = address.replace(/\r/g, ' ').replace(/\n/g, ' ');
@@ -432,6 +474,45 @@ const _single_line_address = (address) => {
 }
 
 
+
+const fixAddressOrdering = (address) => {
+  if (!address) return address;
+
+  let s = _single_line_address(address).trim();
+  let match;
+
+  match = s.match(REGEX_PATTERNS.addressStatePostcodeStart);
+  if (match) {
+    const [, state, postcode, rest] = match;
+    const out = `${rest.trim()} ${state.toUpperCase()} ${postcode}`;
+    return out.replace(REGEX_PATTERNS.whitespaceMultiple, ' ').trim();
+  }
+
+  match = s.match(REGEX_PATTERNS.addressPostcodeStateEnd);
+  if (match) {
+    const [, postcode, rest, state] = match;
+    const out = `${rest.trim()} ${state.toUpperCase()} ${postcode}`;
+    return out.replace(REGEX_PATTERNS.whitespaceMultiple, ' ').trim();
+  }
+
+  match = s.match(REGEX_PATTERNS.addressStatePostcodeMiddle);
+  if (match) {
+    const [, part1, state, postcode, part2] = match;
+    const out = `${part1.trim()} ${part2.trim()} ${state.toUpperCase()} ${postcode}`;
+    return out.replace(REGEX_PATTERNS.whitespaceMultiple, ' ').trim();
+  }
+
+  match = s.match(REGEX_PATTERNS.addressStatePostcodeAny);
+  if (match) {
+    const state = match[1].toUpperCase();
+    const postcode = match[2];
+    const rest = (s.substring(0, match.index) + s.substring(match.index + match[0].length)).trim();
+    const out = `${rest.replace(REGEX_PATTERNS.whitespaceMultiple, ' ')} ${state} ${postcode}`;
+    return out.trim();
+  }
+
+  return s;
+};
 
 
 
@@ -670,7 +751,7 @@ const batchValidateRecords = async (records, batchSize = 100) => {
     email: String(r.email ?? '').trim(),
     landline: String(r.landline ?? '').trim(),
     // 👇 ensure address is reordered before any “starts-with-number” checks
-    address: _single_line_address(String(r.address ?? '').trim()),
+    address: fixAddressOrdering(String(r.address ?? '').trim()),
   }));
 
   if (prepped.length <= batchSize || !workerThreadPool) {
@@ -723,8 +804,7 @@ const cleanAndValidate = (records) => {
     const email = String(record.email || '').trim();
     const rawLandline = String(record.landline || '').trim();
 
-    address = _single_line_address(address);
-
+    address = fixAddressOrdering(address);
 
     const dateofbirth = normalizeDateField(rawDob);
     const lastseen = normalizeDateField(rawLastseen);
@@ -734,6 +814,9 @@ const cleanAndValidate = (records) => {
 
     const mobileDigits = mobile.replace(REGEX_PATTERNS.digitOnly, '');
     if (!(mobileDigits.length === 10 && mobileDigits.startsWith('04'))) continue;
+
+    // 👇 --- THIS IS THE FIX (matching the worker) --- 👇
+    //if (!address || !/\d/.test(address)) continue;
 
     const landline = isValidLandline(rawLandline) ? rawLandline.replace(REGEX_PATTERNS.digitOnly, '') : '';
     const full_name = `${firstName} ${lastName}`.trim();
