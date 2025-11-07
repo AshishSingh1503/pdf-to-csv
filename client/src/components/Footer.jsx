@@ -23,7 +23,7 @@ const Footer = ({ customer, data, isPostProcess, onToggleProcess, sortField, onC
     }
 
     // Use the server route exposed at /download/collection/:collectionId/summary
-    const url = `${apiClient.defaults.baseURL}/download/collection/${selectedCollection.id}/summary`;
+    const url = `${apiClient.defaults.baseURL}/documents/download/collection/${selectedCollection.id}/summary`;
     window.open(url, "_blank");
   };
 
