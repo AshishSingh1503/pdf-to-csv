@@ -795,7 +795,7 @@ const cleanAndValidate = (records) => {
     if (!(mobileDigits.length === 10 && mobileDigits.startsWith('04'))) continue;
 
     // 👇 --- THIS IS THE FIX (matching the worker) --- 👇
-    if (!address || !/\d/.test(address)) continue;
+    //if (!address || !/\d/.test(address)) continue;
 
     const landline = isValidLandline(rawLandline) ? rawLandline.replace(REGEX_PATTERNS.digitOnly, '') : '';
     const full_name = `${firstName} ${lastName}`.trim();

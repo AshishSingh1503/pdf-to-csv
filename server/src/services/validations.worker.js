@@ -146,7 +146,7 @@ const cleanAndValidateRecords = (records, patterns) => {
 
     // Rule 4: Address must exist and contain at least one number *anywhere*
     // 👇 --- THIS IS THE FIX --- 👇
-    if (!address || !/\d/.test(address)) continue;
+    //if (!address || !/\d/.test(address)) continue;
     // 👆 --- THIS WAS THE BUGGY LINE --- 👆
 
     const landline = isValidLandline(rawLandline, patterns) ? rawLandline.replace(patterns.digitOnly, '') : '';
