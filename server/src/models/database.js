@@ -120,6 +120,19 @@ export const initializeDatabase = async () => {
       )
     `);
 
+    // Create removed_records table
+    await query(`
+      CREATE TABLE IF NOT EXISTS removed_records (
+        id SERIAL PRIMARY KEY,
+        collection_id INTEGER REFERENCES collections(id) ON DELETE CASCADE,
+        full_name VARCHAR(255),
+        file_name VARCHAR(255),
+        rejection_reason VARCHAR(255),
+        processing_timestamp TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
     // Create file_metadata table
     await query(`
       CREATE TABLE IF NOT EXISTS file_metadata (
@@ -170,6 +183,9 @@ export const initializeDatabase = async () => {
     `);
     await query(`
       CREATE INDEX IF NOT EXISTS idx_file_collection_id ON file_metadata(collection_id)
+    `);
+    await query(`
+      CREATE INDEX IF NOT EXISTS idx_removed_collection_id ON removed_records(collection_id)
     `);
 
     console.log('✅ Database tables initialized and verified successfully');

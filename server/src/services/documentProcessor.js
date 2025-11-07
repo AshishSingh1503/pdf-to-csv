@@ -717,7 +717,9 @@ const batchValidateRecords = async (records, batchSize = 100) => {
       )
     );
 
-    return validatedBatches.flat();
+    const allValid = validatedBatches.flatMap(b => (b && b.validRecords) ? b.validRecords : []);
+    const allRejected = validatedBatches.flatMap(b => (b && b.rejectedRecords) ? b.rejectedRecords : []);
+    return { validRecords: allValid, rejectedRecords: allRejected };
   } catch (error) {
     console.warn(`⚠️  Worker thread validation failed, falling back to main thread:`, error.message);
     return cleanAndValidate(prepped);
@@ -729,6 +731,7 @@ const batchValidateRecords = async (records, batchSize = 100) => {
 // ⭐ UPDATED: Use safe String().trim() for all field access
 const cleanAndValidate = (records) => {
   const cleanRecords = [];
+  const rejectedRecords = [];
 
   for (const record of records) {
     // ⭐ Use String() to safely convert any type to string before trim()
@@ -750,14 +753,51 @@ const cleanAndValidate = (records) => {
     const dateofbirth = normalizeDateField(rawDob);
     const lastseen = normalizeDateField(rawLastseen);
 
-    if (!firstName || firstName.length <= 1) continue;
-    if (!mobile) continue;
+    if (!firstName || firstName.length <= 1) {
+      rejectedRecords.push({
+        first_name: firstName,
+        last_name: lastName,
+        mobile,
+        address,
+        email,
+        dateofbirth,
+        landline: rawLandline,
+        lastseen,
+        rejection_reason: 'Invalid first name (single character)'
+      });
+      continue;
+    }
+
+    if (!mobile) {
+      rejectedRecords.push({
+        first_name: firstName,
+        last_name: lastName,
+        mobile,
+        address,
+        email,
+        dateofbirth,
+        landline: rawLandline,
+        lastseen,
+        rejection_reason: 'Missing mobile number'
+      });
+      continue;
+    }
 
     const mobileDigits = mobile.replace(REGEX_PATTERNS.digitOnly, '');
-    if (!(mobileDigits.length === 10 && mobileDigits.startsWith('04'))) continue;
-
-    // 👇 --- THIS IS THE FIX (matching the worker) --- 👇
-   // if (!address || !/\d/.test(address)) continue;
+    if (!(mobileDigits.length === 10 && mobileDigits.startsWith('04'))) {
+      rejectedRecords.push({
+        first_name: firstName,
+        last_name: lastName,
+        mobile,
+        address,
+        email,
+        dateofbirth,
+        landline: rawLandline,
+        lastseen,
+        rejection_reason: 'Invalid mobile number'
+      });
+      continue;
+    }
 
     const landline = isValidLandline(rawLandline) ? rawLandline.replace(REGEX_PATTERNS.digitOnly, '') : '';
     const full_name = `${firstName} ${lastName}`.trim();
@@ -776,7 +816,7 @@ const cleanAndValidate = (records) => {
   }
 
   // De-duplication has been moved to processPDFs
-  return cleanRecords;
+  return { validRecords: cleanRecords, rejectedRecords };
 };
 
 
@@ -891,22 +931,26 @@ export const processPDFs = async (pdfFiles, batchSize = 10, maxWorkers = 4) => {
         const entities = extractEntitiesSimple(result.document);
         const rawRecords = simpleGrouping(entities);
 
-        // OPTIMIZATION 5: Batch validate records in parallel
-        // OPTIMIZATION 5: Batch validate records in parallel
-        const filteredRecordsRaw = await batchValidateRecords(rawRecords, 100);
+        // OPTIMIZATION 5: Batch validate records in parallel (worker returns both valid and rejected)
+        const { validRecords: filteredRecordsRaw, rejectedRecords: validationRejected } = await batchValidateRecords(rawRecords, 100);
 
-
-        // 👇 --- ADD THIS DE-DUPLICATION BLOCK --- 👇
+        // 👇 --- DEDUPLICATION BLOCK (also track duplicates as rejected) --- 👇
         const uniqueRecords = [];
         const seenMobiles = new Set();
-        for (const record of filteredRecordsRaw) {
+        const duplicateRejected = [];
+        for (const record of (filteredRecordsRaw || [])) {
           if (!seenMobiles.has(record.mobile)) {
             uniqueRecords.push(record);
             seenMobiles.add(record.mobile);
+          } else {
+            duplicateRejected.push({
+              ...record,
+              rejection_reason: 'Duplicate mobile number'
+            });
           }
         }
         const filteredRecords = uniqueRecords; // Use the de-duplicated list
-        // 👆 --- END OF NEW BLOCK --- 👆
+        // 👆 --- END DEDUPLICATION --- 👆
         console.log('📋 Extracted entities:', JSON.stringify(entities.map(e => ({
           type: e.type,
           value: e.value.substring(0, 30),
@@ -923,8 +967,12 @@ export const processPDFs = async (pdfFiles, batchSize = 10, maxWorkers = 4) => {
         console.log('✅ Entities written to entity-debug.json');
 
 
-        rawRecords.forEach(r => r.file_name = file.name);
-        filteredRecords.forEach(r => r.file_name = file.name); // This now uses the unique list
+  // Assign file name to all record types
+  rawRecords.forEach(r => r.file_name = file.name);
+  filteredRecords.forEach(r => r.file_name = file.name); // This now uses the unique list
+
+  const allRejectedForFile = [...(validationRejected || []), ...duplicateRejected];
+  allRejectedForFile.forEach(r => r.file_name = file.name);
 
         // OPTIMIZATION 5: Parallel JSON generation
         const { preProcessingJson, postProcessingJson } = await generateJsonObjects(
@@ -940,6 +988,7 @@ export const processPDFs = async (pdfFiles, batchSize = 10, maxWorkers = 4) => {
         return {
           rawRecords,
           filteredRecords,
+          rejectedRecords: allRejectedForFile,
           preProcessingJson,
           postProcessingJson,
         };
@@ -948,6 +997,7 @@ export const processPDFs = async (pdfFiles, batchSize = 10, maxWorkers = 4) => {
         return {
           rawRecords: [],
           filteredRecords: [],
+          rejectedRecords: [],
           preProcessingJson: null,
           postProcessingJson: null,
           error: fileError.message
@@ -982,6 +1032,18 @@ export const processPDFs = async (pdfFiles, batchSize = 10, maxWorkers = 4) => {
       .filter(r => r.postProcessingJson)
       .map(r => r.postProcessingJson);
 
+    // Aggregate removed/rejected records from each file
+    const allRemovedRecordsRaw = results
+      .filter(r => !r.error)
+      .flatMap(r => r.rejectedRecords || []);
+
+    const allRemovedRecords = allRemovedRecordsRaw.map((record, index) => ({
+      id: index + 1,
+      full_name: `${record.first_name || ''} ${record.last_name || ''}`.trim(),
+      file_name: record.file_name,
+      rejection_reason: record.rejection_reason
+    }));
+
     const processingTime = ((Date.now() - startTime) / 1000).toFixed(2);
     const successRate = allRawRecords.length > 0
       ? `${((allFilteredRecords.length / allRawRecords.length) * 100).toFixed(1)}%`
@@ -998,6 +1060,7 @@ export const processPDFs = async (pdfFiles, batchSize = 10, maxWorkers = 4) => {
     return {
       allRawRecords,
       allFilteredRecords,
+      allRemovedRecords,
       allPreProcessingJson,
       allPostProcessingJson,
     };
