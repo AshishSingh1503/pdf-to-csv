@@ -179,18 +179,6 @@ class WorkerThreadPool {
 
 
 
-// --- Helper Functions ---
-
-
-// const extractEntitiesSimple = (document) => {
-//   return document.entities?.map(entity => ({
-//     type: entity.type?.toLowerCase().trim(),
-//     value: entity.mentionText?.trim(),
-//   })) || [];
-// };
-
-
-
 // ⭐ UPDATED: Use name-parser library for accurate name splitting
 const parseFullName = (fullName) => {
   if (!fullName) return { first: '', last: '' };
@@ -233,13 +221,6 @@ const parseFullName = (fullName) => {
   }
 };
 
-// --- Replace extractEntitiesSimple and simpleGrouping with this improved version ---
-
-/**
- * extractEntitiesSimple
- * - returns entities with type, value, and best-effort startIndex/endIndex (numbers)
- * - falls back to using the entity order index if textAnchor is not present
- */
 const extractEntitiesSimple = (document) => {
   const raw = document.entities || [];
   return raw.map((entity, idx) => {
@@ -426,44 +407,6 @@ const simpleGrouping = (entities) => {
 
 
 
-// const simpleGrouping = (entities) => {
-//   const records = [];
-//   const names = entities.filter(e => e.type === 'name').map(e => e.value);
-//   const mobiles = entities.filter(e => e.type === 'mobile').map(e => e.value);
-//   const addresses = entities.filter(e => e.type === 'address').map(e => e.value);
-//   const emails = entities.filter(e => e.type === 'email').map(e => e.value);
-//   const dobs = entities.filter(e => e.type === 'dateofbirth').map(e => e.value);
-//   const landlines = entities.filter(e => e.type === 'landline').map(e => e.value);
-//   const lastseens = entities.filter(e => e.type === 'lastseen').map(e => e.value);
-
-//   const maxCount = Math.max(names.length, mobiles.length, addresses.length, emails.length, dobs.length, landlines.length, lastseens.length);
-
-//   for (let i = 0; i < maxCount; i++) {
-//     const record = {};
-
-//     if (i < names.length) {
-//       // ⭐ Use name-parser for accurate first/last name splitting
-//       const { first, last } = parseFullName(names[i]);
-//       record.first_name = first;
-//       record.last_name = last;
-//     }
-
-//     if (i < mobiles.length) record.mobile = mobiles[i];
-//     if (i < addresses.length) record.address = addresses[i];
-//     if (i < emails.length) record.email = emails[i];
-//     if (i < dobs.length) record.dateofbirth = dobs[i];
-//     if (i < landlines.length) record.landline = landlines[i];
-//     if (i < lastseens.length) record.lastseen = lastseens[i];
-
-//     if (record.first_name) {
-//       records.push(record);
-//     }
-//   }
-//   return records;
-// };
-
-
-
 const _single_line_address = (address) => {
   if (!address) return '';
   let s = address.replace(/\r/g, ' ').replace(/\n/g, ' ');
@@ -472,7 +415,6 @@ const _single_line_address = (address) => {
   s = s.endsWith('.') ? s.slice(0, -1) : s;
   return s;
 }
-
 
 
 const fixAddressOrdering = (address) => {
@@ -513,7 +455,6 @@ const fixAddressOrdering = (address) => {
 
   return s;
 };
-
 
 
 const cleanName = (name) => {
@@ -816,7 +757,7 @@ const cleanAndValidate = (records) => {
     if (!(mobileDigits.length === 10 && mobileDigits.startsWith('04'))) continue;
 
     // 👇 --- THIS IS THE FIX (matching the worker) --- 👇
-    if (!address || !/\d/.test(address)) continue;
+   // if (!address || !/\d/.test(address)) continue;
 
     const landline = isValidLandline(rawLandline) ? rawLandline.replace(REGEX_PATTERNS.digitOnly, '') : '';
     const full_name = `${firstName} ${lastName}`.trim();
