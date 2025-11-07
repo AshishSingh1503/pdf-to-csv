@@ -45,6 +45,10 @@ try {
 
 // --- OPTIMIZATION 6: Pre-compiled Regex Patterns ---
 const REGEX_PATTERNS = {
+  addressStatePostcodeStart: /^\s*([A-Za-z]{2,3})\s+(\d{4})\s+(.+)$/i,
+  addressPostcodeStateEnd: /^\s*(\d{4})\s+(.+?)\s+([A-Za-z]{2,3})\s*$/i,
+  addressStatePostcodeMiddle: /^(.+?)\s+([A-Za-z]{2,3})\s+(\d{4})\s+(.+)$/i,
+  addressStatePostcodeAny: /([A-Za-z]{2,3})\s+(\d{4})/i,
   nameInvalidChars: /[^A-Za-zÀ-ÖØ-öø-ÿ'\-\s]/g,
   nameSpecialChars: /�|･･･|…|•|\u2026/g,
   dateInvalidChars: /[^0-9A-Za-z\s\-\/]/g,
@@ -742,7 +746,6 @@ const cleanAndValidate = (records) => {
 
     address = fixAddressOrdering(address);
 
-
     const dateofbirth = normalizeDateField(rawDob);
     const lastseen = normalizeDateField(rawLastseen);
 
@@ -760,6 +763,9 @@ const cleanAndValidate = (records) => {
       discardedRecords.push({ record, reason: 'Invalid mobile (must be 10 digits starting with 04)' });
       continue;
     }
+
+    // 👇 --- THIS IS THE FIX (matching the worker) --- 👇
+    //if (!address || !/\d/.test(address)) continue;
 
     const landline = isValidLandline(rawLandline) ? rawLandline.replace(REGEX_PATTERNS.digitOnly, '') : '';
     const full_name = `${firstName} ${lastName}`.trim();
