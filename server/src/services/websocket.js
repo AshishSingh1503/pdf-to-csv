@@ -6,21 +6,11 @@ let wss;
 export const initWebSocket = (server) => {
   const wsPath = process.env.WS_PATH || '/ws';
   console.log(`🔌 Initializing WebSocket server (path=${wsPath})`);
-  wss = new WebSocketServer({ server });
+  // Let the ws library enforce the path; pass path to the constructor
+  wss = new WebSocketServer({ server, path: wsPath });
 
   wss.on('connection', (ws, req) => {
-    try {
-      const reqPath = req && req.url ? req.url : '';
-      if (wsPath && !reqPath.startsWith(wsPath)) {
-        console.log('Rejecting WS connection on unexpected path', reqPath);
-        try { ws.close(); } catch (e) {}
-        return;
-      }
-    } catch (e) {
-      // ignore path checking errors
-    }
-
-    console.log('Client connected');
+    console.log('Client connected via WS path', wsPath);
     ws.on('close', () => {
       console.log('Client disconnected');
     });

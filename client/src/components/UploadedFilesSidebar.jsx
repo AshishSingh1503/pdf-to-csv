@@ -1,6 +1,6 @@
 // client/src/components/UploadedFilesSidebar.jsx
-import React, { useState, useEffect, useRef } from 'react';
-import { getUploadedFiles, reprocessFile, getBatchStatus } from '../api/documentApi';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { getUploadedFiles, getBatchStatus } from '../api/documentApi';
 import socket from '../services/websocket';
 import ProgressBar from './ProgressBar';
 
@@ -14,6 +14,8 @@ const UploadedFilesSidebar = ({ isOpen, onClose, selectedCollection, currentBatc
   const fetchTimerRef = useRef(null);
 
   // Clear batch state when the selected collection or sidebar open state changes
+  // Note: intentionally depend only on selectedCollection and isOpen so that changes
+  // to function identities (fetchFiles/scheduleFetchFiles) don't reset the UI.
   useEffect(() => {
     setActiveBatches({});
     setBatchMessages([]);
@@ -24,11 +26,12 @@ const UploadedFilesSidebar = ({ isOpen, onClose, selectedCollection, currentBatc
     activeBatchesRef.current = activeBatches;
   }, [activeBatches]);
 
+  // fetchFiles is stable via useCallback below and used by the WS handler
   useEffect(() => {
     if (isOpen && selectedCollection) {
       fetchFiles();
     }
-  }, [isOpen, selectedCollection]);
+  }, [isOpen, selectedCollection, fetchFiles]);
 
   useEffect(() => {
     const handler = (event) => {
@@ -75,7 +78,7 @@ const UploadedFilesSidebar = ({ isOpen, onClose, selectedCollection, currentBatc
           const progressVal = message.progress ?? message.percent;
           setActiveBatches(prev => {
             const copy = { ...prev };
-            if (!copy[batchId]) {
+      if (!copy[batchId]) {
               // create placeholder if missing. Prefer server-provided startedAt; otherwise leave undefined
                 copy[batchId] = {
                   batchId,
@@ -100,14 +103,14 @@ const UploadedFilesSidebar = ({ isOpen, onClose, selectedCollection, currentBatc
                           const total = counts.total || files.length || existing.fileCount || 0;
                           const processed = (counts.completed || 0) + (counts.failed || 0);
                           const p = total > 0 ? Math.round((processed / total) * 100) : existing.progress;
-                        copy2[batchId] = {
-                          ...existing,
-                          fileCount: total,
-                          progress: typeof p === 'number' ? p : existing.progress,
-                          // prefer server-provided startedAt when present
-                          startTime: resp.startedAt ? new Date(resp.startedAt) : existing.startTime,
-                          lastUpdate: new Date(),
-                        };
+                          copy2[batchId] = {
+                            ...existing,
+                            fileCount: total,
+                            progress: typeof p === 'number' ? p : existing.progress,
+                            // prefer server-provided startedAt when present
+                            startTime: resp.startedAt ? new Date(resp.startedAt) : existing.startTime,
+                            lastUpdate: new Date(),
+                          };
                           return copy2;
                         });
                         // hydrate files into the file list if we currently have none
@@ -118,8 +121,8 @@ const UploadedFilesSidebar = ({ isOpen, onClose, selectedCollection, currentBatc
                           return prev;
                         });
                       }
-                    } catch (e) {
-                      // ignore hydration failures; we still have WS heartbeat
+                    } catch (err) {
+                      console.warn('Batch hydration failed', err);
                     }
                   })();
                 }
@@ -223,9 +226,9 @@ const UploadedFilesSidebar = ({ isOpen, onClose, selectedCollection, currentBatc
             });
           });
         }
-      } catch (err) {
-        console.warn('Failed to handle WS message', err);
-      }
+          } catch (err) {
+            console.warn('Failed to handle WS message', err);
+          }
     };
 
     socket.subscribe(handler);
@@ -236,15 +239,15 @@ const UploadedFilesSidebar = ({ isOpen, onClose, selectedCollection, currentBatc
           const buffered = socket.getBufferedEventsForCollection(selectedCollection.id) || [];
           // replay older -> newer
           buffered.slice().reverse().forEach(ev => {
-            try { handler({ data: JSON.stringify(ev.msg) }); } catch (e) { /* ignore */ }
+            try { handler({ data: JSON.stringify(ev.msg) }); } catch (err) { console.warn('Failed to replay buffered event', err); }
           });
         } else {
           // If buffering isn't available, proactively refresh the file list to avoid missed updates
           scheduleFetchFiles();
         }
       }
-    } catch (e) {
-      console.warn('⚠️  Failed to hydrate from buffered WS events:', e && e.message);
+    } catch (err) {
+      console.warn('⚠️  Failed to hydrate from buffered WS events:', err && err.message);
       // Fallback: ensure file list is refreshed
       scheduleFetchFiles();
     }
@@ -254,13 +257,15 @@ const UploadedFilesSidebar = ({ isOpen, onClose, selectedCollection, currentBatc
       (timeoutsRef.current || []).forEach(t => clearTimeout(t));
       timeoutsRef.current = [];
       if (fetchTimerRef.current) {
-        try { clearTimeout(fetchTimerRef.current); } catch (e) {}
+        try { clearTimeout(fetchTimerRef.current); } catch (err) { console.warn('clearTimeout error', err); }
         fetchTimerRef.current = null;
       }
     };
-  }, [selectedCollection, isOpen]);
+  }, [selectedCollection, isOpen, fetchFiles, scheduleFetchFiles]);
 
-  const fetchFiles = async () => {
+  // stable fetchFiles so we can reference it safely in effects/handlers
+  const fetchFiles = useCallback(async () => {
+    if (!selectedCollection) return;
     setLoading(true);
     try {
       const fetchedFiles = await getUploadedFiles(selectedCollection.id);
@@ -270,21 +275,19 @@ const UploadedFilesSidebar = ({ isOpen, onClose, selectedCollection, currentBatc
     } finally {
       setLoading(false);
     }
-  };
+  }, [selectedCollection]);
 
-  const handleReprocess = async (fileId) => {
+  const scheduleFetchFiles = useCallback(() => {
     try {
-      await reprocessFile(fileId);
-      alert(`File ${fileId} is being reprocessed.`);
-    } catch (error) {
-      console.error('Error reprocessing file:', error);
-      alert('Failed to reprocess file.');
-    }
-  };
+      if (fetchTimerRef.current) clearTimeout(fetchTimerRef.current);
+    } catch (err) { console.warn('clearTimeout error', err); }
+    fetchTimerRef.current = setTimeout(() => {
+      fetchFiles();
+      fetchTimerRef.current = null;
+    }, 350);
+  }, [fetchFiles]);
 
-  const handleDownload = (file) => {
-    window.open(file.cloud_storage_path, '_blank');
-  };
+  // removed unused/redundant handlers (re-enable when UI supports them)
 
   const formatElapsedTime = (startTime) => {
     if (!startTime) return '';
@@ -301,16 +304,6 @@ const UploadedFilesSidebar = ({ isOpen, onClose, selectedCollection, currentBatc
   };
 
   const getActiveBatchCount = () => Object.keys(activeBatches).length;
-
-  const scheduleFetchFiles = () => {
-    try {
-      if (fetchTimerRef.current) clearTimeout(fetchTimerRef.current);
-    } catch (e) {}
-    fetchTimerRef.current = setTimeout(() => {
-      fetchFiles();
-      fetchTimerRef.current = null;
-    }, 350);
-  };
 
   return (
     <div className={`fixed top-0 right-0 h-full w-96 bg-white shadow-lg p-4 z-50 overflow-y-auto ${!isOpen ? 'hidden' : ''}`}>
@@ -378,7 +371,7 @@ const UploadedFilesSidebar = ({ isOpen, onClose, selectedCollection, currentBatc
           {/* Recent Batch Messages */}
           {batchMessages.length > 0 && (
             <div className="mb-4 p-2">
-              {batchMessages.slice(0, 5).map((m, idx) => (
+              {batchMessages.slice(0, 5).map((m) => (
                 <div key={m.ts} className={`flex items-start justify-between p-2 mb-2 rounded ${m.type === 'success' ? 'bg-green-50' : m.type === 'error' ? 'bg-red-50' : 'bg-blue-50'}`}>
                   <div>
                     <div className="text-sm">{m.text}</div>
@@ -425,7 +418,7 @@ const UploadedFilesSidebar = ({ isOpen, onClose, selectedCollection, currentBatc
                   </span>
                 </div>
               </div>
-              {safeStatus === 'processing' && (
+              {(safeStatus === 'processing' && typeof file.upload_progress === 'number') && (
                 <div className="mt-2">
                   <ProgressBar progress={file.upload_progress} />
                 </div>

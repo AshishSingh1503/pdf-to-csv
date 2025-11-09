@@ -47,7 +47,7 @@ class WebsocketService {
 
     this.socket.addEventListener('error', (err) => {
       console.warn('WebSocket error', err);
-      try { this.socket.close(); } catch (e) {}
+      try { this.socket.close(); } catch (closeErr) { console.warn('Error closing WebSocket', closeErr); }
     });
 
     this.socket.addEventListener('message', (evt) => this._onMessage(evt));
@@ -57,7 +57,7 @@ class WebsocketService {
     let parsed;
     try {
       parsed = JSON.parse(evt.data);
-    } catch (e) {
+    } catch {
       // pass raw through
       parsed = evt.data;
     }

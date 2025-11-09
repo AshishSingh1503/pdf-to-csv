@@ -1,7 +1,7 @@
 import React from "react";
 import { apiClient } from "../api/apiClient";
 
-const Footer = ({ customer, data, isPostProcess, onToggleProcess, sortField, onClearSort, selectedCollection }) => {
+const Footer = ({ customer, isPostProcess, onToggleProcess, sortField, onClearSort, selectedCollection }) => {
   const handleDownload = (fileType) => {
     if (selectedCollection) {
       const type = isPostProcess ? 'post' : 'pre';

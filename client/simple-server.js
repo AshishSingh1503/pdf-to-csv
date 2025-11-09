@@ -1,3 +1,5 @@
+/* eslint-env node */
+/* global require, __dirname, process */
 const express = require('express');
 const path = require('path');
 

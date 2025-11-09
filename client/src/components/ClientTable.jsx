@@ -15,24 +15,6 @@ const ClientTable = ({ data, isPostProcess, sortField, sortDirection, onSort }) 
     return sortDirection === 'asc' ? <span className="text-blue-600">↑</span> : <span className="text-blue-600">↓</span>;
   };
 
-  const getSortableField = (displayField) => {
-    // Map display fields to actual data fields
-    if (isPostProcess) {
-      if (displayField === 'FULL NAME') return 'full_name';
-      if (displayField === 'FIRST') return 'first';
-      if (displayField === 'LAST') return 'last';
-    } else {
-      if (displayField === 'FULL NAME') return 'full_name';
-    }
-    if (displayField === 'MOBILE') return 'mobile';
-    if (displayField === 'EMAIL') return 'email';
-    if (displayField === 'ADDRESS') return 'address';
-    if (displayField === 'DOB') return 'dob';
-    if (displayField === 'SEEN') return 'seen';
-    if (displayField === 'SOURCE') return 'source';
-    return null;
-  };
-
   return (
     <div className="p-4">
       <table className="min-w-full bg-white">
