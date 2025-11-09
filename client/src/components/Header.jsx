@@ -1,7 +1,7 @@
 import React from "react";
 import CollectionSelector from "./CollectionSelector";
 
-const Header = ({ customer, onUploadClick, selectedCollection, onCollectionChange, onToggleSidebar }) => {
+const Header = ({ customer, onUploadClick, selectedCollection, onToggleSidebar }) => {
   return (
     <div className="bg-white p-4 border-b border-gray-200">
       <div className="flex justify-between items-center mb-4">

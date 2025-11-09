@@ -1,6 +1,6 @@
 // server/src/routes/documentRoutes.js
 import express from "express";
-import { processDocuments, downloadFile, downloadCollectionCsvs, downloadCollectionExcels, downloadCollectionSummary, getUploadedFiles, reprocessFile, updateUploadProgress } from "../controllers/documentController.js";
+import { processDocuments, downloadFile, downloadCollectionCsvs, downloadCollectionExcels, downloadCollectionSummary, getUploadedFiles, reprocessFile, updateUploadProgress, getBatchStatus } from "../controllers/documentController.js";
 
 const router = express.Router();
 
@@ -10,6 +10,7 @@ router.get("/download/collection/:collectionId", downloadCollectionCsvs);
 router.get("/download/collection/:collectionId/excel", downloadCollectionExcels);
 router.get('/download/collection/:collectionId/summary', downloadCollectionSummary);
 router.get("/files/collection/:collectionId", getUploadedFiles);
+router.get('/batches/:batchId', getBatchStatus);
 router.post("/reprocess/:fileId", reprocessFile);
 router.post("/upload/progress/:fileId", updateUploadProgress);
 

@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useCallback } from "react";
 import { uploadAndProcess } from "../api/documentApi";
 import { dataApi } from "../api/collectionsApi";
 import Sidebar from "../components/Sidebar";
@@ -11,15 +11,14 @@ import SearchBar from "../components/SearchBar";
 import DownloadButtons from "../components/DownloadButtons";
 import UploadedFilesSidebar from "../components/UploadedFilesSidebar";
 import ProgressBar from "../components/ProgressBar";
-import socket from "../services/websocket";
 
 const Home = () => {
-  const [pdfs, setPdfs] = useState([]);
+  
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [customer, setCustomer] = useState(null);
   const [selectedCustomer, setSelectedCustomer] = useState(null);
-  const [selectedPdf, setSelectedPdf] = useState(null);
+  const [selectedPdf] = useState(null);
   const fileInputRef = useRef(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [isPostProcess, setIsPostProcess] = useState(true);
@@ -27,10 +26,10 @@ const Home = () => {
   const [sortDirection, setSortDirection] = useState("asc");
   const [selectedCollection, setSelectedCollection] = useState(null);
   const [searchTerm, setSearchTerm] = useState("");
-  const [showCollectionsSidebar, setShowCollectionsSidebar] = useState(true);
+  const [showCollectionsSidebar] = useState(true);
   const [totalPages, setTotalPages] = useState(1);
   const itemsPerPage = 50;
-  const [downloadLinks, setDownloadLinks] = useState(null);
+  const [downloadLinks] = useState(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [currentBatch, setCurrentBatch] = useState(0);
@@ -58,6 +57,8 @@ const Home = () => {
     }
 
     setTotalBatches(fileChunks.length);
+  // Auto-open the uploaded files sidebar so users can see progress immediately
+  setIsSidebarOpen(true);
     setLoading(true);
     setUploadProgress(0);
     setCurrentBatch(0);
@@ -108,7 +109,7 @@ const Home = () => {
     }
   };
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     try {
       setLoading(true);
       const collectionId = selectedCollection ? selectedCollection.id : null;
@@ -159,11 +160,11 @@ const Home = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [selectedCollection, searchTerm, currentPage, isPostProcess]);
 
   useEffect(() => {
     fetchData();
-  }, [selectedCollection, searchTerm, currentPage, isPostProcess]);
+  }, [fetchData]);
 
   const handleSearch = (term) => {
     setSearchTerm(term);
@@ -181,10 +182,7 @@ const Home = () => {
     setSelectedCollection(null);
   };
 
-  const handlePdfSelect = (pdf) => {
-    setSelectedPdf(pdf);
-    setCurrentPage(1);
-  };
+  
 
   const handlePageChange = (pageNumber) => {
     setCurrentPage(pageNumber);
@@ -284,7 +282,6 @@ const Home = () => {
           customer={customer}
           onUploadClick={handleHeaderUploadClick}
           selectedCollection={selectedCollection}
-          onCollectionChange={setSelectedCollection}
           onToggleSidebar={() => setIsSidebarOpen(!isSidebarOpen)}
         />
 
@@ -351,7 +348,6 @@ const Home = () => {
 
         <Footer
           customer={customer}
-          data={data}
           isPostProcess={isPostProcess}
           onToggleProcess={handleToggleProcess}
           sortField={sortField}
@@ -368,6 +364,8 @@ const Home = () => {
         isOpen={isSidebarOpen}
         onClose={() => setIsSidebarOpen(false)}
         selectedCollection={selectedCollection}
+        currentBatch={currentBatch}
+        totalBatches={totalBatches}
       />
     </div>
   );

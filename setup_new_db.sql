@@ -64,8 +64,11 @@ CREATE TABLE file_metadata (
   file_size BIGINT,
   processing_status VARCHAR(20) DEFAULT 'processing',
   upload_progress INTEGER DEFAULT 0,
+  batch_id VARCHAR(50),
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE INDEX IF NOT EXISTS idx_file_metadata_batch_id ON file_metadata(batch_id);
 
 -- Transfer ownership to pdf2csv_app_user
 ALTER TABLE customers OWNER TO pdf2csv_app_user;

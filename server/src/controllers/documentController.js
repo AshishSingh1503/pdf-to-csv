@@ -2,6 +2,7 @@
 // FIXED VERSION - Parallel Processing
 
 import path from "path";
+import crypto from 'crypto';
 import { processPDFs } from "../services/documentProcessor.js";
 import { PreProcessRecord } from "../models/PreProcessRecord.js";
 import { PostProcessRecord } from "../models/PostProcessRecord.js";
@@ -16,10 +17,40 @@ import xlsx from "xlsx";
 import { saveFiles, createZip } from '../utils/fileHelpers.js';
 import { broadcast } from '../services/websocket.js';
 
+// Helper: normalize metadata to camelCase for client consumption while keeping snake_case fallback
+const normalizeMetadata = (meta) => {
+  if (!meta) return meta;
+  // if meta is a plain object from DB (snake_case), map common fields
+  const normalized = {
+    id: meta.id,
+    collectionId: meta.collection_id ?? meta.collectionId,
+    originalFilename: meta.original_filename ?? meta.originalFilename,
+    fileSize: meta.file_size ?? meta.fileSize,
+    processingStatus: meta.processing_status ?? meta.processingStatus,
+    cloudStoragePath: meta.cloud_storage_path ?? meta.cloudStoragePath,
+    createdAt: meta.created_at ?? meta.createdAt,
+    batchId: meta.batch_id ?? meta.batchId,
+  };
+
+  // copy any remaining keys that aren't explicitly normalized to preserve data
+  Object.keys(meta).forEach((k) => {
+    if (!Object.values(normalized).includes(meta[k]) && !Object.prototype.hasOwnProperty.call(normalized, k)) {
+      // only add keys not already normalized (avoid collisions)
+      if (!(k in normalized)) normalized[k] = meta[k];
+    }
+  });
+
+  return normalized;
+};
+
 export const processDocuments = async (req, res) => {
   try {
-    const files = req.files?.pdfs;
+    // Accept both 'pdfs' (server) and 'files' (tests/other tooling) to be compatible
+    const files = req.files?.pdfs || req.files?.files;
     const { collectionId } = req.body;
+
+    // normalize collectionId once
+    const collectionIdNum = parseInt(collectionId, 10);
 
     if (!files) {
       return res.status(400).json({ error: "No PDF files uploaded" });
@@ -29,14 +60,28 @@ export const processDocuments = async (req, res) => {
       return res.status(400).json({ error: "Collection ID is required" });
     }
 
+    // Validate parsed collection id is a finite number before proceeding.
+    if (Number.isNaN(collectionIdNum) || !Number.isFinite(collectionIdNum)) {
+      return res.status(400).json({ error: 'Invalid collection ID' });
+    }
+
     const fileArray = Array.isArray(files) ? files : [files];
+
+    // generate a unique batch id (use crypto.randomUUID when available)
+    const batchId = (crypto && typeof crypto.randomUUID === 'function')
+      ? crypto.randomUUID()
+      : `batch_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+    // include a startedAt timestamp so clients opening mid-batch can align elapsed time
+    const startedAt = new Date().toISOString();
 
     const fileMetadataPromises = fileArray.map(file => {
       return FileMetadata.create({
-        collection_id: parseInt(collectionId),
+        collection_id: collectionIdNum,
         original_filename: file.name,
         file_size: file.size,
         processing_status: 'processing',
+        batch_id: batchId,
       });
     });
     const fileMetadatas = await Promise.all(fileMetadataPromises);
@@ -47,8 +92,18 @@ export const processDocuments = async (req, res) => {
       message: `Successfully uploaded ${fileArray.length} file(s). Processing in background.`,
     });
 
+    // Emit batch start event (include startedAt to help clients show elapsed time accurately)
+    broadcast({
+      type: 'BATCH_PROCESSING_STARTED',
+      batchId,
+      collectionId: collectionIdNum,
+      fileCount: fileArray.length,
+      files: fileMetadatas,
+      startedAt
+    });
+
     // FIXED: Process all files in the background in PARALLEL
-    processPDFFilesParallel(fileArray, collectionId, fileMetadatas);
+    processPDFFilesParallel(fileArray, collectionIdNum, fileMetadatas, batchId, startedAt);
 
   } catch (err) {
     console.error("🔥 Error in processDocuments:", err);
@@ -59,12 +114,60 @@ export const processDocuments = async (req, res) => {
 // ============================================
 // FIXED VERSION: Parallel Processing
 // ============================================
-const processPDFFilesParallel = async (fileArray, collectionId, fileMetadatas) => {
+const processPDFFilesParallel = async (fileArray, collectionIdNum, fileMetadatas, batchId = null, startedAt = null) => {
+  let progressInterval = null;
   try {
-    const sessionDir = path.join(process.cwd(), "output", `session_${Date.now()}`);
-    fs.mkdirSync(sessionDir, { recursive: true });
-
     console.log(`📊 Starting parallel processing for ${fileArray.length} files...`);
+
+    // Emit initial batch progress and start heartbeat
+    try {
+      // initial progress: 0%
+      broadcast({ type: 'BATCH_PROCESSING_PROGRESS', batchId, collectionId: collectionIdNum, status: 'started', message: 'Processing PDFs with Document AI...', progress: 0, startedAt });
+    } catch (e) {
+      console.warn('⚠️  Unable to broadcast initial batch progress:', e && e.message);
+    }
+
+    // heartbeat: include numeric progress if we can compute it from DB via a single aggregate query
+    // Use recursive setTimeout to avoid overlapping runs under load. Use a stopped guard for deterministic termination.
+    let heartbeatInFlight = false;
+    let stopped = false;
+    const HEARTBEAT_INTERVAL = 15000;
+
+    const runHeartbeat = async () => {
+      try {
+        if (stopped) return;
+        if (heartbeatInFlight) return; // skip if previous run still in-flight
+        heartbeatInFlight = true;
+        let progress = undefined;
+        try {
+          const counts = await FileMetadata.countByStatusForBatch(batchId);
+          const total = counts.total || 0;
+          const processed = (counts.completed || 0) + (counts.failed || 0);
+          if (total > 0) {
+            progress = Math.round((processed / total) * 100);
+          }
+        } catch (e) {
+          progress = undefined;
+        }
+
+        broadcast({ type: 'BATCH_PROCESSING_PROGRESS', batchId, collectionId: collectionIdNum, status: 'processing', message: 'Still processing...', timestamp: new Date().toISOString(), startedAt, progress });
+      } catch (err) {
+        console.warn('⚠️  Failed to broadcast heartbeat:', err && err.message);
+      } finally {
+        heartbeatInFlight = false;
+        // schedule next heartbeat only if not stopped
+        try {
+          if (!stopped) {
+            progressInterval = setTimeout(runHeartbeat, HEARTBEAT_INTERVAL);
+          }
+        } catch (e) {
+          // ignore schedule errors
+        }
+      }
+    };
+
+    // start first heartbeat
+    progressInterval = setTimeout(runHeartbeat, HEARTBEAT_INTERVAL);
 
     // STEP 1: Process ALL files at once with high concurrency
     const { allRawRecords, allFilteredRecords, allRemovedRecords } = 
@@ -74,7 +177,7 @@ const processPDFFilesParallel = async (fileArray, collectionId, fileMetadatas) =
 
     // ⭐ OPTIMIZATION: Prepare ALL records at once
    const allPreProcessRecords = allRawRecords.map((record) => ({  
-     collection_id: parseInt(collectionId),  
+     collection_id: collectionIdNum,  
      full_name: `${record.first_name || ''} ${record.last_name || ''}`.trim(),  
      mobile: record.mobile,  
      email: record.email,  
@@ -87,14 +190,14 @@ const processPDFFilesParallel = async (fileArray, collectionId, fileMetadatas) =
    }));
 
     const allPostProcessRecords = allFilteredRecords.map((record) => ({
-      collection_id: parseInt(collectionId),
+      collection_id: collectionIdNum,
       ...record,
       full_name: `${record.first_name || ''} ${record.last_name || ''}`.trim(),
       processing_timestamp: processingTimestamp
     }));
 
     const allRemovedRecordsForDB = (allRemovedRecords || []).map((record) => ({
-      collection_id: parseInt(collectionId),
+      collection_id: collectionIdNum,
       full_name: record.full_name,
       file_name: record.file_name,
       rejection_reason: record.rejection_reason,
@@ -105,35 +208,59 @@ const processPDFFilesParallel = async (fileArray, collectionId, fileMetadatas) =
 
     // ⭐ KEY OPTIMIZATION: Insert ALL at once (uses only 2 connections!)
     console.log(`💾 Inserting into database...`);
-    const [insertedPre, insertedPost, insertedRemoved] = await Promise.all([
-      PreProcessRecord.bulkCreate(allPreProcessRecords),
-      PostProcessRecord.bulkCreate(allPostProcessRecords),
-      RemovedRecord.bulkCreate(allRemovedRecordsForDB),
-    ]);
+    // Guard bulkCreate calls to avoid ORM/DB edge cases with empty arrays
+    const insertedPre = (allPreProcessRecords && allPreProcessRecords.length > 0) ? await PreProcessRecord.bulkCreate(allPreProcessRecords) : [];
+    const insertedPost = (allPostProcessRecords && allPostProcessRecords.length > 0) ? await PostProcessRecord.bulkCreate(allPostProcessRecords) : [];
+    const insertedRemoved = (allRemovedRecordsForDB && allRemovedRecordsForDB.length > 0) ? await RemovedRecord.bulkCreate(allRemovedRecordsForDB) : [];
 
     console.log(`✅ Inserted: ${insertedPre.length} pre, ${insertedPost.length} post, ${insertedRemoved.length} removed records`);
 
-    // STEP 2: Update file metadata in parallel
-    const updatePromises = fileMetadatas.map(async (metadata) => {
-      try {
-        return await metadata.updateStatus('completed');
-      } catch (err) {
-        console.error(`❌ Error updating status:`, err);
-        return null;
-      }
-    });
+    // Broadcast DB insert milestone
+    try {
+      // milestone: DB insert ~33%
+      broadcast({ type: 'BATCH_PROCESSING_PROGRESS', batchId, collectionId: collectionIdNum, status: 'database_insert_complete', message: 'Records inserted into database', progress: 33, startedAt });
+    } catch (e) {
+      console.warn('⚠️  Unable to broadcast database insert milestone:', e && e.message);
+    }
 
-    const updatedMetadatas = await Promise.all(updatePromises);
-    console.log(`✅ Updated status for ${updatedMetadatas.filter(m => m).length} files`);
+    // NOTE: Defer marking files as 'completed' until after each successful upload
+    // This prevents temporary 'completed' state before uploads finish.
 
     // STEP 3: Upload files to cloud in parallel
     const uploadPromises = fileArray.map(async (file, idx) => {
       try {
-        const uploadedFiles = await CloudStorageService.uploadProcessedFiles([file], collectionId);
-        if (fileMetadatas[idx] && uploadedFiles && uploadedFiles) {
-          await fileMetadatas[idx].updateCloudStoragePath(uploadedFiles.url);
+        const uploadedFiles = await CloudStorageService.uploadProcessedFiles([file], collectionIdNum);
+        // uploadedFiles may be an array (common) or an object. Guard both shapes.
+        if (fileMetadatas[idx]) {
+          let uploadedUrl = null;
+          if (Array.isArray(uploadedFiles) && uploadedFiles.length > 0 && uploadedFiles[0] && uploadedFiles[0].url) {
+            uploadedUrl = uploadedFiles[0].url;
+          } else if (uploadedFiles && typeof uploadedFiles === 'object' && uploadedFiles.url) {
+            uploadedUrl = uploadedFiles.url;
+          }
+
+          const ok = !!uploadedUrl;
+          if (ok) {
+            await fileMetadatas[idx].updateCloudStoragePath(uploadedUrl);
+            // mark this file as completed now that upload succeeded
+            try {
+              await fileMetadatas[idx].updateStatus('completed');
+              return uploadedFiles;
+            } catch (statusErr) {
+              // If we fail to mark as completed, consider this file failed so it doesn't stay 'processing'
+              console.warn('⚠️  Failed to update file status to completed for', fileMetadatas[idx].id, statusErr && statusErr.message);
+              try {
+                await fileMetadatas[idx].updateStatus('failed');
+              } catch (failedErr) {
+                console.error('❌ Also failed to mark file as failed for', fileMetadatas[idx].id, failedErr && failedErr.message);
+              }
+              return null;
+            }
+          } else {
+            // Treat missing URL as a failed upload. Do not update DB here; let the centralized handler mark failed files
+            return null;
+          }
         }
-        return uploadedFiles;
       } catch (err) {
         console.error(`❌ Error uploading file ${file.name}:`, err);
         return null;
@@ -141,41 +268,178 @@ const processPDFFilesParallel = async (fileArray, collectionId, fileMetadatas) =
     });
 
     const uploadResults = await Promise.all(uploadPromises);
-    console.log(`✅ Uploaded ${uploadResults.filter(r => r).length} files to cloud`);
+    const succeededCount = uploadResults.filter(r => r).length;
+    console.log(`✅ Uploaded ${succeededCount} files to cloud`);
+
+    // If any upload failed, mark files as failed and emit batch failure
+    const anyUploadFailed = uploadResults.some(r => !r);
+    if (anyUploadFailed) {
+      console.error('❌ One or more uploads failed for this batch. Marking failed files only.');
+
+      // Determine which indices failed
+      const failedIndices = uploadResults.map((r, i) => (!r ? i : -1)).filter(i => i >= 0);
+
+      // Update only failed file metadata to 'failed' (skip if already failed)
+      const failedUpdatePromises = failedIndices.map(async (idx) => {
+        const metadata = fileMetadatas[idx];
+        if (!metadata) return null;
+        try {
+          const latest = await FileMetadata.findById(metadata.id);
+          if (!latest) return null;
+          if ((latest.processing_status || '').toLowerCase() === 'failed') return latest;
+          // mark as failed
+          return await latest.updateStatus('failed');
+        } catch (err) {
+          console.error('❌ Error marking metadata as failed for index', idx, err);
+          return null;
+        }
+      });
+      const updatedFailedMetadatas = await Promise.all(failedUpdatePromises);
+
+      // Refresh current metadata states (mix of completed and failed)
+      const currentMetadatas = await Promise.all(fileMetadatas.map(async (m) => {
+        try { return await FileMetadata.findById(m.id); } catch (e) { return m; }
+      }));
+
+      // Ensure no file is still in 'processing' state - convert to failed if found
+      for (let i = 0; i < currentMetadatas.length; i++) {
+        const cm = currentMetadatas[i];
+        if (!cm) continue;
+        if ((cm.processing_status || '').toLowerCase() === 'processing') {
+          try {
+            currentMetadatas[i] = await cm.updateStatus('failed');
+          } catch (e) {
+            console.warn('⚠️ Failed to flip processing->failed for', cm.id, e && e.message);
+          }
+        }
+      }
+
+      // Broadcast failure milestone with partial flag
+      try {
+        broadcast({ type: 'BATCH_PROCESSING_FAILED', batchId, collectionId: collectionIdNum, fileCount: fileMetadatas.length, error: 'One or more uploads failed', partial: true, files: currentMetadatas, startedAt });
+      } catch (e) {
+        console.warn('⚠️  Unable to broadcast cloud upload failure milestone:', e && e.message);
+      }
+
+      // Emit FILES_PROCESSED for each file with its current metadata so UI can update individual statuses
+      try {
+        const failureBroadcasts = (currentMetadatas || []).map(async (metadata) => {
+          if (!metadata) return null;
+          const cid = metadata.collection_id || metadata.collectionId || collectionIdNum;
+          const camel = normalizeMetadata(metadata);
+          // include both camelCase and snake_case for backward compatibility
+          broadcast({ type: 'FILES_PROCESSED', batchId, collectionId: cid, fileMetadata: camel, file_metadata: metadata });
+        });
+        await Promise.all(failureBroadcasts);
+      } catch (e) {
+        console.warn('⚠️  Unable to broadcast individual file statuses after partial failure:', e && e.message);
+      }
+
+      return;
+    }
+
+    // Broadcast cloud upload milestone
+    try {
+      // milestone: cloud upload ~66%
+      broadcast({ type: 'BATCH_PROCESSING_PROGRESS', batchId, collectionId: collectionIdNum, status: 'cloud_upload_complete', message: 'Files uploaded to cloud storage', progress: 66, startedAt });
+    } catch (e) {
+      console.warn('⚠️  Unable to broadcast cloud upload milestone:', e && e.message);
+    }
 
     // STEP 4: Broadcast completion
+    // Broadcast batch completion (refresh file metadata so clients receive up-to-date objects)
+    try {
+      // completion: 100% - refresh metadata so clients receive up-to-date objects
+      const refreshedMetadatas = await Promise.all(fileMetadatas.map(m => FileMetadata.findById(m.id)));
+      broadcast({ type: 'BATCH_PROCESSING_COMPLETED', batchId, collectionId: collectionIdNum, fileCount: fileMetadatas.length, files: refreshedMetadatas, message: 'Batch processing completed successfully', progress: 100, startedAt });
+    } catch (e) {
+      console.warn('⚠️  Unable to broadcast batch completion:', e && e.message);
+    }
+
+    // Reload each metadata from DB before broadcasting to avoid stale processing_status
     const broadcastPromises = fileMetadatas.map(async (metadata) => {
-      broadcast({ 
-        type: 'FILES_PROCESSED', 
-        collectionId: metadata.collection_id, 
-        fileMetadata: metadata 
-      });
+      try {
+        const fresh = await FileMetadata.findById(metadata.id);
+        const payloadMeta = fresh || metadata;
+        const camel = normalizeMetadata(payloadMeta);
+        const cid = payloadMeta ? (payloadMeta.collection_id || payloadMeta.collectionId) : collectionIdNum;
+        // include both camelCase and snake_case for backward compatibility
+        broadcast({ type: 'FILES_PROCESSED', batchId, collectionId: cid, fileMetadata: camel, file_metadata: payloadMeta });
+      } catch (e) {
+        // fallback to broadcasting existing object
+        try {
+          const camel = normalizeMetadata(metadata);
+          broadcast({ type: 'FILES_PROCESSED', batchId, collectionId: metadata.collection_id, fileMetadata: camel, file_metadata: metadata });
+        } catch (err) {
+          console.warn('⚠️  Unable to broadcast FILES_PROCESSED for metadata', metadata && metadata.id, err && err.message);
+        }
+      }
     });
 
     await Promise.all(broadcastPromises);
     console.log(`✅ Broadcast complete events`);
 
-    console.log(`🎉 All ${fileArray.length} files processed successfully!`);
+  console.log(`🎉 All ${fileArray.length} files processed successfully!`);
 
   } catch (error) {
     console.error("🔥 Error in processPDFFilesParallel:", error);
-    
-    // Mark all files as failed
-    const failurePromises = fileMetadatas.map(async (metadata) => {
-      try {
-        await metadata.updateStatus('failed');
-        broadcast({ 
-          type: 'FILES_PROCESSED', 
-          collectionId: metadata.collection_id, 
-          fileMetadata: metadata 
-        });
-      } catch (err) {
-        console.error(`❌ Error updating failed status:`, err);
-      }
-    });
 
-    await Promise.all(failurePromises);
+    // Only mark files that are still in 'processing' as 'failed'. Do not overwrite already-completed files.
+    const updatedMetadatas = await Promise.all(fileMetadatas.map(async (metadata) => {
+      try {
+        const latest = await FileMetadata.findById(metadata.id);
+        if (!latest) return null;
+        const status = (latest.processing_status || '').toLowerCase();
+        if (status === 'processing') {
+          try {
+            return await latest.updateStatus('failed');
+          } catch (uErr) {
+            console.error('❌ Error updating metadata to failed for', latest.id, uErr && uErr.message);
+            return latest;
+          }
+        }
+        // keep completed/failed as-is
+        return latest;
+      } catch (err) {
+        console.error(`❌ Error fetching latest metadata for id ${metadata.id}:`, err && err.message);
+        return null;
+      }
+    }));
+
+    // Determine if this is a partial failure (some files completed)
+    const completedCount = (updatedMetadatas || []).filter(m => m && (m.processing_status || '').toLowerCase() === 'completed').length;
+    const anyCompleted = completedCount > 0;
+
+    // Broadcast batch failure using updated metadata. If some files succeeded, mark partial:true
+    try {
+      broadcast({ type: 'BATCH_PROCESSING_FAILED', batchId, collectionId: collectionIdNum, fileCount: fileMetadatas.length, error: error?.message, files: updatedMetadatas, startedAt, partial: anyCompleted });
+    } catch (e) {
+      console.warn('⚠️  Unable to broadcast batch failure:', e && e.message);
+    }
+
+    // Broadcast individual FILES_PROCESSED events with normalized payloads
+    try {
+      const broadcastPromises = (updatedMetadatas || []).map(async (metadata) => {
+        if (!metadata) return null;
+        const camel = normalizeMetadata(metadata);
+        // include both camelCase and snake_case for backward compatibility
+        broadcast({ type: 'FILES_PROCESSED', batchId, collectionId: metadata.collection_id || metadata.collectionId, fileMetadata: camel, file_metadata: metadata });
+      });
+      await Promise.all(broadcastPromises);
+    } catch (e) {
+      console.warn('⚠️  Unable to broadcast individual failure events:', e && e.message);
+    }
+
     throw error;
+  } finally {
+    // Ensure heartbeat interval is cleared on all exits (success, partial failure, exception)
+    try {
+      // stop future heartbeats deterministically
+      try { stopped = true; } catch (e) {}
+      if (progressInterval) clearTimeout(progressInterval);
+    } catch (e) {
+      console.warn('⚠️  Error clearing progressInterval:', e && e.message);
+    }
   }
 };
 
@@ -235,8 +499,9 @@ export const updateUploadProgress = async (req, res) => {
     if (!fileMetadata) {
       return res.status(404).json({ error: 'File not found' });
     }
-    await fileMetadata.updateUploadProgress(progress);
-    broadcast({ type: 'UPLOAD_PROGRESS', fileId, progress });
+  await fileMetadata.updateUploadProgress(progress);
+  // include collectionId and batchId to help clients filter events deterministically
+  broadcast({ type: 'UPLOAD_PROGRESS', fileId, progress, collectionId: fileMetadata.collection_id, batchId: fileMetadata.batch_id || null });
     res.json({ success: true });
   } catch (err) {
     console.error('🔥 Error in updateUploadProgress:', err);
@@ -308,7 +573,7 @@ export const reprocessFile = async (req, res) => {
 
     await fileMetadata.updateStatus('completed');
 
-    broadcast({ type: 'FILE_REPROCESSED', collectionId: fileMetadata.collection_id });
+  broadcast({ type: 'FILE_REPROCESSED', collectionId: fileMetadata.collection_id, batchId: fileMetadata.batch_id || null, fileId: fileMetadata.id });
 
     res.json({ success: true, message: `File ${fileId} has been reprocessed.` });
   } catch (err) {
@@ -552,6 +817,36 @@ export const getUploadedFiles = async (req, res) => {
     res.json({ success: true, data: files });
   } catch (err) {
     console.error('🔥 Error in getUploadedFiles:', err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+export const getBatchStatus = async (req, res) => {
+  try {
+    const { batchId } = req.params;
+    if (!batchId) return res.status(400).json({ error: 'batchId is required' });
+
+    const counts = await FileMetadata.countByStatusForBatch(batchId);
+    const files = await FileMetadata.findByBatchId(batchId);
+
+    // Derive a startedAt value from the oldest file created_at in this batch (best-effort)
+    let startedAt = null;
+    try {
+      if (files && files.length > 0) {
+        const times = files.map(f => new Date(f.created_at).getTime()).filter(t => !Number.isNaN(t));
+        if (times.length > 0) {
+          const minTs = Math.min(...times);
+          startedAt = new Date(minTs).toISOString();
+        }
+      }
+    } catch (e) {
+      // ignore and return null startedAt
+      startedAt = null;
+    }
+
+    return res.json({ success: true, batchId, counts, files, startedAt });
+  } catch (err) {
+    console.error('🔥 Error in getBatchStatus:', err);
     res.status(500).json({ error: err.message });
   }
 };
