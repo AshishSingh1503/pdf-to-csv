@@ -25,6 +25,29 @@ const UploadedFilesSidebar = ({ isOpen, onClose, selectedCollection, currentBatc
   useEffect(() => {
     activeBatchesRef.current = activeBatches;
   }, [activeBatches]);
+// stable fetchFiles so we can reference it safely in effects/handlers
+  const fetchFiles = useCallback(async () => {
+    if (!selectedCollection) return;
+    setLoading(true);
+    try {
+      const fetchedFiles = await getUploadedFiles(selectedCollection.id);
+      setFiles(fetchedFiles);
+    } catch (error) {
+      console.error('Error fetching uploaded files:', error);
+    } finally {
+      setLoading(false);
+    }
+  }, [selectedCollection]);
+  
+  const scheduleFetchFiles = useCallback(() => {
+    try {
+      if (fetchTimerRef.current) clearTimeout(fetchTimerRef.current);
+    } catch (err) { console.warn('clearTimeout error', err); }
+    fetchTimerRef.current = setTimeout(() => {
+      fetchFiles();
+      fetchTimerRef.current = null;
+    }, 350);
+  }, [fetchFiles]);
 
   // fetchFiles is stable via useCallback below and used by the WS handler
   useEffect(() => {
@@ -263,29 +286,6 @@ const UploadedFilesSidebar = ({ isOpen, onClose, selectedCollection, currentBatc
     };
   }, [selectedCollection, isOpen, fetchFiles, scheduleFetchFiles]);
 
-  // stable fetchFiles so we can reference it safely in effects/handlers
-  const fetchFiles = useCallback(async () => {
-    if (!selectedCollection) return;
-    setLoading(true);
-    try {
-      const fetchedFiles = await getUploadedFiles(selectedCollection.id);
-      setFiles(fetchedFiles);
-    } catch (error) {
-      console.error('Error fetching uploaded files:', error);
-    } finally {
-      setLoading(false);
-    }
-  }, [selectedCollection]);
-
-  const scheduleFetchFiles = useCallback(() => {
-    try {
-      if (fetchTimerRef.current) clearTimeout(fetchTimerRef.current);
-    } catch (err) { console.warn('clearTimeout error', err); }
-    fetchTimerRef.current = setTimeout(() => {
-      fetchFiles();
-      fetchTimerRef.current = null;
-    }, 350);
-  }, [fetchFiles]);
 
   // removed unused/redundant handlers (re-enable when UI supports them)
 
