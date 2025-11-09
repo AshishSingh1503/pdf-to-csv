@@ -10,6 +10,7 @@ export class FileMetadata {
     this.file_size = data.file_size;
     this.processing_status = data.processing_status;
     this.upload_progress = data.upload_progress;
+    this.batch_id = data.batch_id;
     this.created_at = data.created_at;
   }
 
@@ -21,15 +22,16 @@ export class FileMetadata {
       cloud_storage_path,
       file_size,
       processing_status = 'processing',
-      upload_progress = 0
+      upload_progress = 0,
+      batch_id = null
     } = metadata;
 
     const result = await query(
       `INSERT INTO file_metadata 
-       (collection_id, original_filename, cloud_storage_path, file_size, processing_status, upload_progress)
-       VALUES ($1, $2, $3, $4, $5, $6)
+       (collection_id, original_filename, cloud_storage_path, file_size, processing_status, upload_progress, batch_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
        RETURNING *`,
-      [collection_id, original_filename, cloud_storage_path, file_size, processing_status, upload_progress]
+      [collection_id, original_filename, cloud_storage_path, file_size, processing_status, upload_progress, batch_id]
     );
     return new FileMetadata(result.rows[0]);
   }
@@ -102,6 +104,35 @@ export class FileMetadata {
       [id]
     );
     return result.rows.length ? new FileMetadata(result.rows[0]) : null;
+  }
+
+  static async findByBatchId(batchId) {
+    if (!batchId) return [];
+    const result = await query(
+      'SELECT * FROM file_metadata WHERE batch_id = $1 ORDER BY created_at DESC',
+      [batchId]
+    );
+    return result.rows.map(r => new FileMetadata(r));
+  }
+
+  // Count files by status for a given batch_id in a single aggregate query
+  static async countByStatusForBatch(batchId) {
+    if (!batchId) return { completed: 0, failed: 0, total: 0 };
+    const result = await query(
+      `SELECT
+         COUNT(*)::int AS total,
+         SUM(CASE WHEN processing_status = 'completed' THEN 1 ELSE 0 END)::int AS completed,
+         SUM(CASE WHEN processing_status = 'failed' THEN 1 ELSE 0 END)::int AS failed
+       FROM file_metadata
+       WHERE batch_id = $1`,
+      [batchId]
+    );
+    const row = result.rows[0] || { total: 0, completed: 0, failed: 0 };
+    return {
+      total: parseInt(row.total || 0, 10),
+      completed: parseInt(row.completed || 0, 10),
+      failed: parseInt(row.failed || 0, 10),
+    };
   }
 
   // Delete files by collection ID

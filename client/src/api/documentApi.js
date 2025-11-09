@@ -28,3 +28,8 @@ export const updateUploadProgress = async (fileId, progress) => {
   const { data } = await axios.post(`${BASE_URL}/upload/progress/${fileId}`, { progress });
   return data;
 };
+
+export const getBatchStatus = async (batchId) => {
+  const { data } = await axios.get(`${BASE_URL}/batches/${batchId}`);
+  return data;
+};

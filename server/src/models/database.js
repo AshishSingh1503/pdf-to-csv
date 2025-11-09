@@ -153,6 +153,17 @@ export const initializeDatabase = async () => {
       ADD COLUMN IF NOT EXISTS upload_progress INTEGER DEFAULT 0
     `);
 
+    // Add batch_id to file_metadata if missing (safe to run repeatedly)
+    await query(`
+      ALTER TABLE file_metadata
+      ADD COLUMN IF NOT EXISTS batch_id VARCHAR(50)
+    `);
+
+    // Create index on batch_id for quick aggregations
+    await query(`
+      CREATE INDEX IF NOT EXISTS idx_file_metadata_batch_id ON file_metadata(batch_id)
+    `);
+
     // Add full_name column to post_process_records if it doesn't exist
     await query(`
       ALTER TABLE post_process_records

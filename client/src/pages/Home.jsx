@@ -58,6 +58,8 @@ const Home = () => {
     }
 
     setTotalBatches(fileChunks.length);
+  // Auto-open the uploaded files sidebar so users can see progress immediately
+  setIsSidebarOpen(true);
     setLoading(true);
     setUploadProgress(0);
     setCurrentBatch(0);
@@ -368,6 +370,8 @@ const Home = () => {
         isOpen={isSidebarOpen}
         onClose={() => setIsSidebarOpen(false)}
         selectedCollection={selectedCollection}
+        currentBatch={currentBatch}
+        totalBatches={totalBatches}
       />
     </div>
   );
