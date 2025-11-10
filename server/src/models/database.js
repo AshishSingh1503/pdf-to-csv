@@ -1,33 +1,52 @@
 // server/src/models/database.js
 import { Pool } from 'pg';
 import { config } from '../config/index.js';
+import logger from '../utils/logger.js';
 
 // Database connection pool
 const pool = new Pool({
-  host: process.env.DB_HOST || 'localhost',
-  port: parseInt(process.env.DB_PORT) || 5432,
-  database: process.env.DB_NAME || 'pdf2csv_db',
-  user: process.env.DB_USER || 'postgres',
-  password: process.env.DB_PASSWORD || 'postgres',
+  host: process.env.DB_HOST || config.dbHost || 'localhost',
+  port: parseInt(process.env.DB_PORT) || config.dbPort || 5432,
+  database: process.env.DB_NAME || config.dbName || 'pdf2csv_db',
+  user: process.env.DB_USER || config.dbUser || 'postgres',
+  password: process.env.DB_PASSWORD || config.dbPassword || 'postgres',
   ssl: process.env.DB_HOST?.includes('/cloudsql/')
     ? false
     : process.env.DB_SSL === 'true'
     ? { rejectUnauthorized: false }
     : false,
-  max: 200, // Maximum number of clients in the pool
+  max: config.dbPoolMax || 200, // Maximum number of clients in the pool
+  min: config.dbPoolMin || 2,
   idleTimeoutMillis: 30000, // Close idle clients after 30 seconds
   connectionTimeoutMillis: 10000, // Increased timeout for Cloud SQL connection
 });
 
 // Test database connection
 pool.on('connect', () => {
-  console.log('✅ Connected to PostgreSQL database');
+  logger.info('Connected to PostgreSQL database');
 });
 
 pool.on('error', (err) => {
-  console.error('❌ Unexpected error on idle client', err);
+  logger.error('Unexpected error on idle client', { error: err });
   process.exit(-1);
 });
+
+// Periodic pool statistics for monitoring
+try {
+  setInterval(() => {
+    try {
+      logger.debug('Postgres pool stats', {
+        total: pool.totalCount,
+        idle: pool.idleCount,
+        waiting: pool.waitingCount,
+      });
+    } catch (err) {
+      logger.warn('Failed to read pool stats', { err });
+    }
+  }, 30000);
+} catch (err) {
+  logger.warn('Failed to schedule pool stats logging', { err });
+}
 
 // Helper function to execute queries
 export const query = async (text, params) => {
@@ -35,10 +54,10 @@ export const query = async (text, params) => {
   try {
     const res = await pool.query(text, params);
     const duration = Date.now() - start;
-    console.log('Executed query', { text, duration, rows: res.rowCount });
+    logger.debug('Executed query', { text, duration, rows: res.rowCount });
     return res;
   } catch (error) {
-    console.error('Database query error:', error);
+    logger.error('Database query error', { error });
     throw error;
   }
 };
@@ -199,9 +218,9 @@ export const initializeDatabase = async () => {
       CREATE INDEX IF NOT EXISTS idx_removed_collection_id ON removed_records(collection_id)
     `);
 
-    console.log('✅ Database tables initialized and verified successfully');
+    logger.info('Database tables initialized and verified successfully');
   } catch (error) {
-    console.error('❌ Error initializing database:', error);
+    logger.error('Error initializing database:', error);
     throw error;
   }
 };

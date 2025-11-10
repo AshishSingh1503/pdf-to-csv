@@ -3,8 +3,11 @@ import { customerApi } from "../api/customerApi";
 import { collectionsApi } from "../api/collectionsApi";
 import CustomerModal from "./CustomerModal";
 import CollectionModal from "./CollectionModal";
+import { useToast } from '../contexts/ToastContext'
+import { SidebarSkeleton } from './SkeletonLoader'
+import EmptyState from './EmptyState'
 
-const CustomersSidebar = ({ selectedCustomer, onCustomerSelect, onCollectionSelect, onRefresh }) => {
+const CustomersSidebar = ({ isOpen = true, onClose = () => {}, selectedCustomer, onCustomerSelect, onCollectionSelect, onRefresh }) => {
   const [customers, setCustomers] = useState([]);
   const [collections, setCollections] = useState({});
   const [loading, setLoading] = useState(true);
@@ -61,8 +64,10 @@ const CustomersSidebar = ({ selectedCustomer, onCustomerSelect, onCollectionSele
     setShowCustomerModal(true);
   };
 
+  const { showConfirm, showError, showSuccess } = useToast()
+
   const handleDeleteCustomer = async (customer) => {
-    if (window.confirm(`Are you sure you want to delete "${customer.name}"? This will also delete all associated collections and data.`)) {
+    showConfirm(`Are you sure you want to delete "${customer.name}"? This will also delete all associated collections and data.`, async () => {
       try {
         await customerApi.delete(customer.id);
         await fetchCustomers();
@@ -70,11 +75,14 @@ const CustomersSidebar = ({ selectedCustomer, onCustomerSelect, onCollectionSele
         if (selectedCustomer && selectedCustomer.id === customer.id) {
           onCustomerSelect(null);
         }
+        showSuccess('Customer deleted')
       } catch (err) {
-        alert('Failed to delete customer');
+        showError('Failed to delete customer')
         console.error('Error deleting customer:', err);
       }
-    }
+    }, () => {
+      // cancelled
+    })
   };
 
   const handleCreateCollection = (customer) => {
@@ -95,24 +103,26 @@ const CustomersSidebar = ({ selectedCustomer, onCustomerSelect, onCollectionSele
   };
 
   return (
-    <div className="w-80 bg-white border-r border-gray-200 flex flex-col h-full">
-      {/* Header */}
-      <div className="p-4 border-b border-gray-200">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold text-gray-900">Customers</h2>
+    <div className={`w-full lg:w-80 fixed lg:relative left-0 top-0 h-full z-40 transform transition-transform duration-300 bg-white dark:bg-slate-800 border-r ${!isOpen ? '-translate-x-full lg:translate-x-0' : 'translate-x-0'}`}
+      aria-hidden={!isOpen}
+    >
+      <div className="flex items-center justify-between p-4 border-b border-gray-200">
+        <h2 className="text-lg font-semibold text-gray-900 dark:text-slate-100">Customers</h2>
+        <div className="flex items-center space-x-2">
           <button
             onClick={handleCreateCustomer}
-            className="px-3 py-1 bg-blue-600 text-white text-sm rounded-md hover:bg-blue-700"
+            className="px-3 py-1 bg-blue-600 text-white text-sm rounded-md hover:bg-blue-700 dark:bg-blue-600 dark:hover:bg-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-blue-500 active:scale-95"
           >
             + New Customer
           </button>
+          <button onClick={onClose} aria-label="Close customers sidebar" className="lg:hidden px-2 py-1 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500">✕</button>
         </div>
       </div>
 
       {/* Customers List */}
-     <div className="flex-1 overflow-y-auto p-4">
+      <div className="flex-1 overflow-y-auto p-4">
        {loading ? (
-         <div className="text-center text-gray-500">Loading customers...</div>
+         <SidebarSkeleton count={3} />
        ) : error ? (
          <div className="text-center text-red-500">{error}</div>
        ) : (
@@ -120,37 +130,41 @@ const CustomersSidebar = ({ selectedCustomer, onCustomerSelect, onCollectionSele
            {customers.map((customer) => (
              <div key={customer.id}>
                <div
-                 className={`p-3 rounded-lg cursor-pointer border-2 flex items-center justify-between transition-colors ${
+                 className={`p-3 rounded-lg cursor-pointer border-2 flex items-center justify-between transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 active:scale-95 ${
                    selectedCustomer && selectedCustomer.id === customer.id
-                     ? 'border-blue-500 bg-blue-50'
-                     : 'border-gray-200 hover:border-gray-300'
+                     ? 'border-blue-500 bg-blue-50 dark:bg-slate-700'
+                     : 'border-gray-200 hover:border-gray-300 dark:border-slate-700 dark:hover:border-slate-600'
                  }`}
                  onClick={() => onCustomerSelect(customer)}
+                 tabIndex={0}
+                 role="button"
+                 aria-label={`Select customer ${customer.name}`}
+                 onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onCustomerSelect(customer) } }}
                >
                  <div>
-                   <div className="font-medium text-gray-900">{customer.name}</div>
-                   <div className="text-sm text-gray-500">
+                   <div className="font-medium text-gray-900 dark:text-slate-100">{customer.name}</div>
+                   <div className="text-sm text-slate-500 dark:text-slate-300">
                      {collections[customer.id]?.length || 0} collections
                    </div>
                  </div>
                  <div className="flex items-center space-x-2">
                    <button
                      onClick={(e) => { e.stopPropagation(); handleCreateCollection(customer); }}
-                     className="text-sm text-blue-600 hover:text-blue-900"
+                     className="text-sm text-blue-600 hover:text-blue-900 dark:text-sky-400 dark:hover:text-sky-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 active:scale-95"
                      title="New Collection"
                    >
                      + New Collection
                    </button>
                    <button
                      onClick={(e) => { e.stopPropagation(); handleEditCustomer(customer); }}
-                     className="text-sm text-gray-600 hover:text-gray-900"
+                     className="text-sm text-gray-600 hover:text-gray-900 dark:text-slate-300 dark:hover:text-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 active:scale-95"
                      title="Edit"
                    >
                      Edit
                    </button>
                    <button
                      onClick={(e) => { e.stopPropagation(); handleDeleteCustomer(customer); }}
-                     className="text-sm text-red-600 hover:text-red-700"
+                     className="text-sm text-red-600 hover:text-red-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 active:scale-95"
                      title="Delete"
                    >
                      Delete
@@ -162,8 +176,12 @@ const CustomersSidebar = ({ selectedCustomer, onCustomerSelect, onCollectionSele
                    {collections[customer.id]?.map(collection => (
                      <div
                        key={collection.id}
-                       className="p-2 rounded-lg cursor-pointer bg-gray-100 hover:bg-gray-200"
+                       className="p-2 rounded-lg cursor-pointer bg-gray-100 dark:bg-slate-700 hover:bg-gray-200 dark:hover:bg-slate-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 active:scale-95"
                        onClick={() => onCollectionSelect(collection)}
+                       tabIndex={0}
+                       role="button"
+                       aria-label={`Select collection ${collection.name}`}
+                       onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onCollectionSelect(collection) } }}
                      >
                        {collection.name}
                      </div>
@@ -174,9 +192,7 @@ const CustomersSidebar = ({ selectedCustomer, onCustomerSelect, onCollectionSele
            ))}
      
            {(!customers || customers.length === 0) && (
-             <div className="text-center text-gray-500 py-8">
-               No customers yet. Create your first customer!
-             </div>
+             <EmptyState icon="👥" title="No customers yet" description="Create your first customer to get started" action={{ label: '+ New Customer', onClick: handleCreateCustomer }} />
            )}
          </div>
        )}

@@ -2,12 +2,13 @@
 import express from 'express';
 import { DocumentProcessorServiceClient } from "@google-cloud/documentai";
 import { config } from '../config/index.js';
+import logger from '../utils/logger.js';
 
 const router = express.Router();
 
 router.get('/document-ai', async (req, res) => {
   try {
-    console.log('🔍 Testing Document AI configuration...');
+  logger.info('Testing Document AI configuration...');
     
     // Check environment variables
     const envVars = {
@@ -18,20 +19,20 @@ router.get('/document-ai', async (req, res) => {
       GOOGLE_APPLICATION_CREDENTIALS: process.env.GOOGLE_APPLICATION_CREDENTIALS
     };
     
-    console.log('Environment Variables:', envVars);
+  logger.debug('Environment Variables:', envVars);
     
     // Initialize client
     const clientConfig = process.env.NODE_ENV === 'production' ? {} : { keyFilename: config.credentials };
     const client = new DocumentProcessorServiceClient(clientConfig);
-    console.log('✅ Document AI client initialized');
+  logger.info('Document AI client initialized');
     
     // Test processor access
     const processorName = `projects/${config.projectId}/locations/${config.location}/processors/${config.processorId}`;
-    console.log('📋 Processor Name:', processorName);
+  logger.debug('Processor Name:', processorName);
     
     try {
       const [processor] = await client.getProcessor({ name: processorName });
-      console.log('✅ Processor accessible:', processor.displayName);
+  logger.info('Processor accessible:', processor.displayName);
       
       res.json({
         success: true,
@@ -46,7 +47,7 @@ router.get('/document-ai', async (req, res) => {
         }
       });
     } catch (error) {
-      console.error('❌ Cannot access processor:', error.message);
+  logger.error('Cannot access processor:', error.message);
       res.status(500).json({
         success: false,
         error: 'Cannot access Document AI processor',
@@ -55,8 +56,8 @@ router.get('/document-ai', async (req, res) => {
       });
     }
     
-  } catch (error) {
-    console.error('❌ Document AI test failed:', error);
+    } catch (error) {
+    logger.error('Document AI test failed:', error);
     res.status(500).json({
       success: false,
       error: 'Document AI initialization failed',

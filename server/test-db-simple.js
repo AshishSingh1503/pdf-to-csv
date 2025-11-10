@@ -1,7 +1,8 @@
 // server/test-db-simple.js
 import { Pool } from 'pg';
+import logger from './src/utils/logger.js';
 
-console.log('🧪 Testing database connection with hardcoded values...');
+logger.info('🧪 Testing database connection with hardcoded values...');
 
 const pool = new Pool({
   host: 'localhost',
@@ -14,14 +15,14 @@ const pool = new Pool({
 
 try {
   const client = await pool.connect();
-  console.log('✅ Database connection successful!');
+  logger.info('✅ Database connection successful!');
   
   // Test query
   const result = await client.query('SELECT version()');
-  console.log('✅ Database version:', result.rows[0].version);
+  logger.info(`✅ Database version: ${result.rows[0].version}`);
   
   // Create tables
-  console.log('📋 Creating tables...');
+  logger.info('📋 Creating tables...');
   
   // Create collections table
   await client.query(`
@@ -34,7 +35,7 @@ try {
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
   `);
-  console.log('✅ Collections table created');
+  logger.info('✅ Collections table created');
   
   // Create pre_process_records table
   await client.query(`
@@ -53,7 +54,7 @@ try {
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
   `);
-  console.log('✅ Pre-process records table created');
+  logger.info('✅ Pre-process records table created');
   
   // Create post_process_records table
   await client.query(`
@@ -73,7 +74,7 @@ try {
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
   `);
-  console.log('✅ Post-process records table created');
+  logger.info('✅ Post-process records table created');
   
   // Create file_metadata table
   await client.query(`
@@ -87,7 +88,7 @@ try {
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
   `);
-  console.log('✅ File metadata table created');
+  logger.info('✅ File metadata table created');
   
   // Create indexes
   await client.query('CREATE INDEX IF NOT EXISTS idx_pre_collection_id ON pre_process_records(collection_id)');
@@ -95,20 +96,20 @@ try {
   await client.query('CREATE INDEX IF NOT EXISTS idx_pre_mobile ON pre_process_records(mobile)');
   await client.query('CREATE INDEX IF NOT EXISTS idx_post_mobile ON post_process_records(mobile)');
   await client.query('CREATE INDEX IF NOT EXISTS idx_file_collection_id ON file_metadata(collection_id)');
-  console.log('✅ Indexes created');
+  logger.info('✅ Indexes created');
   
   // Test inserting a collection
   const insertResult = await client.query(
     'INSERT INTO collections (name, description) VALUES ($1, $2) RETURNING *',
     ['Test Collection', 'A test collection for verification']
   );
-  console.log('✅ Test collection created:', insertResult.rows[0]);
+  logger.info('✅ Test collection created: ' + JSON.stringify(insertResult.rows[0]));
   
   client.release();
   await pool.end();
-  console.log('✅ All tests passed! Database is ready.');
+  logger.info('✅ All tests passed! Database is ready.');
   process.exit(0);
 } catch (error) {
-  console.error('❌ Database test failed:', error.message);
+  logger.error('❌ Database test failed: %s', error.message);
   process.exit(1);
 }

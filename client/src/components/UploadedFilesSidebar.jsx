@@ -3,6 +3,8 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { getUploadedFiles, getBatchStatus } from '../api/documentApi';
 import socket from '../services/websocket';
 import ProgressBar from './ProgressBar';
+import { FileCardSkeleton } from './SkeletonLoader'
+import EmptyState from './EmptyState'
 
 const UploadedFilesSidebar = ({ isOpen, onClose, selectedCollection, currentBatch = 0, totalBatches = 0 }) => {
   const [files, setFiles] = useState([]);
@@ -305,63 +307,79 @@ const UploadedFilesSidebar = ({ isOpen, onClose, selectedCollection, currentBatc
 
   const getActiveBatchCount = () => Object.keys(activeBatches).length;
 
-  return (
-    <div className={`fixed top-0 right-0 h-full w-96 bg-white shadow-lg p-4 z-50 overflow-y-auto ${!isOpen ? 'hidden' : ''}`}>
-      <div className="flex justify-between items-center mb-4">
-        <h2 className="text-xl font-bold">Uploaded Files</h2>
-        <button onClick={onClose} className="text-gray-500 hover:text-gray-700">
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            className="h-6 w-6"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M6 18L18 6M6 6l12 12"
-            />
-          </svg>
-        </button>
-      </div>
+  useEffect(() => {
+    const handler = (e) => {
+      if (e.key === 'Escape' && isOpen) {
+        onClose()
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [isOpen, onClose])
 
-      {loading ? (
-        <p>Loading files...</p>
-      ) : (
+  return (
+    <>
+      {isOpen && <div className="fixed inset-0 bg-black/50 sm:hidden" onClick={onClose} />}
+      <div className={`fixed top-0 right-0 h-full w-full sm:w-96 max-w-full bg-white dark:bg-gray-800 dark:text-white shadow-lg p-4 z-50 overflow-y-auto ${!isOpen ? 'hidden' : ''}`}>
+        <div className="flex justify-between items-center mb-4">
+          <h2 className="text-xl font-bold dark:text-white">Uploaded Files</h2>
+          <button onClick={onClose} className="text-gray-500 hover:text-gray-700 dark:text-gray-300 dark:hover:text-white">
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              className="h-6 w-6"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M6 18L18 6M6 6l12 12"
+              />
+            </svg>
+          </button>
+        </div>
         <div className="space-y-4 pb-20"> {/* added bottom padding so floating button doesn’t overlap */}
 
           {/* Batch Status Section */}
           {(getActiveBatchCount() > 0 || (currentBatch > 0 && totalBatches > 0)) && (
-            <div className="mb-4 p-3 rounded-md bg-blue-50">
+            <div className="mb-4 p-3 rounded-md bg-blue-50 dark:bg-blue-900/20">
               <div className="flex items-center justify-between mb-2">
-                <h3 className="font-semibold text-sm">Processing batches ({getActiveBatchCount()})</h3>
+                <h3 className="font-semibold text-sm dark:text-slate-100">Processing batches ({getActiveBatchCount()})</h3>
                 {(currentBatch > 0 && totalBatches > 0) && (
-                  <div className="text-xs text-blue-700">Batch {currentBatch} of {totalBatches} processing…</div>
+                  <div className="text-xs text-blue-700 dark:text-slate-300">Batch {currentBatch} of {totalBatches} processing…</div>
                 )}
               </div>
               <div className="space-y-2">
-                {Object.values(activeBatches).map(batch => (
-                  <div key={batch.batchId} className="flex flex-col p-2 bg-white rounded shadow-sm">
+                      {Object.values(activeBatches).map(batch => (
+                  <div key={batch.batchId} className="flex flex-col p-2 bg-white dark:bg-gray-800 dark:border-gray-600 rounded shadow-sm">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center space-x-3">
                         <div className="w-3 h-3 rounded-full animate-pulse bg-blue-500" />
                         <div>
-                          <div className="text-sm font-medium">{batch.message}</div>
-                          <div className="text-xs text-gray-500">{batch.fileCount} files {batch.startTime ? `• ${formatElapsedTime(batch.startTime)} ago` : ''}</div>
+                          <div className="text-sm font-medium dark:text-slate-100">{batch.message}</div>
+                          <div className="text-xs text-gray-500 dark:text-slate-300">{batch.fileCount} files {batch.startTime ? `• ${formatElapsedTime(batch.startTime)} ago` : ''}</div>
                         </div>
                       </div>
-                      <div className="text-xs text-gray-600">{batch.status}</div>
+                      <div className="text-xs text-gray-600 dark:text-slate-300">{batch.status}</div>
                     </div>
 
-                    {/* Progress indicator: numeric percent or ProgressBar when available */}
-                    {typeof batch.progress === 'number' ? (
-                      <div className="mt-2 flex items-center space-x-2">
-                        <div className="flex-1"><ProgressBar progress={batch.progress} /></div>
-                        <div className="text-xs text-gray-600 w-12 text-right">{Math.round(batch.progress)}%</div>
-                      </div>
-                    ) : null}
+                    {/* Progress indicator: show ProgressBar with label, percentage and ETA when available */}
+                    {typeof batch.progress === 'number' ? (() => {
+                      const now = Date.now();
+                      let eta = null;
+                      if (batch.startTime && typeof batch.progress === 'number' && batch.progress > 0) {
+                        const elapsedSecs = Math.max(1, Math.floor((now - new Date(batch.startTime).getTime()) / 1000));
+                        eta = Math.round(elapsedSecs * (100 / batch.progress - 1));
+                        if (!isFinite(eta) || eta < 0) eta = null;
+                      }
+                      return (
+                        <div className="mt-2">
+                          <ProgressBar progress={batch.progress} showPercentage={true} label={batch.message || 'Processing'} estimatedTimeRemaining={eta} />
+                        </div>
+                      )
+                    })() : null}
                   </div>
                 ))}
               </div>
@@ -372,27 +390,29 @@ const UploadedFilesSidebar = ({ isOpen, onClose, selectedCollection, currentBatc
           {batchMessages.length > 0 && (
             <div className="mb-4 p-2">
               {batchMessages.slice(0, 5).map((m) => (
-                <div key={m.ts} className={`flex items-start justify-between p-2 mb-2 rounded ${m.type === 'success' ? 'bg-green-50' : m.type === 'error' ? 'bg-red-50' : 'bg-blue-50'}`}>
+                <div key={m.ts} className={`flex items-start justify-between p-2 mb-2 rounded ${m.type === 'success' ? 'bg-green-50 dark:bg-green-900/20 dark:border-green-800 dark:text-green-300' : m.type === 'error' ? 'bg-red-50 dark:bg-red-900/20 dark:border-red-800 dark:text-red-400' : 'bg-blue-50 dark:bg-blue-900/20 dark:border-blue-800 dark:text-blue-200'}`}>
                   <div>
                     <div className="text-sm">{m.text}</div>
-                    <div className="text-xs text-gray-500">{new Date(m.ts).toLocaleTimeString()}</div>
+                    <div className="text-xs text-gray-500 dark:text-slate-300">{new Date(m.ts).toLocaleTimeString()}</div>
                   </div>
                   <div>
-                    <button onClick={() => dismissMessage(m.ts)} className="text-gray-400 hover:text-gray-600">x</button>
+                    <button onClick={() => dismissMessage(m.ts)} className="text-gray-400 hover:text-gray-600 dark:text-gray-400 dark:hover:text-gray-200">x</button>
                   </div>
                 </div>
               ))}
             </div>
           )}
 
+          {isOpen && loading && <FileCardSkeleton count={5} />}
+
           {files.map((file) => {
             const safeStatus = (file.processing_status || '').trim();
             return (
-            <div key={file.id} className="border rounded-lg p-4 bg-gray-50">
+            <div key={file.id} className="border rounded-lg p-4 bg-gray-50 dark:bg-gray-800 dark:border-gray-600 text-gray-900 dark:text-white">
               <div className="flex justify-between items-center">
                 <div>
                   <p className="font-semibold">{file.original_filename}</p>
-                  <p className="text-sm text-gray-500">
+                  <p className="text-sm text-gray-500 dark:text-gray-400">
                     {new Date(file.created_at).toLocaleString()} &nbsp; {(file.file_size / 1024).toFixed(2)} KB
                   </p>
                 </div>
@@ -408,10 +428,10 @@ const UploadedFilesSidebar = ({ isOpen, onClose, selectedCollection, currentBatc
                   <span
                     className={`px-2 py-1 text-xs font-semibold rounded-full ${
                       safeStatus === 'completed'
-                        ? 'text-green-800 bg-green-200'
+                        ? 'text-green-800 bg-green-200 dark:text-green-200 dark:bg-green-900/20'
                         : safeStatus === 'processing'
-                        ? 'text-yellow-800 bg-yellow-200'
-                        : 'text-red-800 bg-red-200'
+                        ? 'text-yellow-800 bg-yellow-200 dark:text-yellow-300 dark:bg-yellow-900/40'
+                        : 'text-red-800 bg-red-200 dark:text-red-200 dark:bg-red-900/20'
                     }`}
                   >
                     {safeStatus}
@@ -425,17 +445,23 @@ const UploadedFilesSidebar = ({ isOpen, onClose, selectedCollection, currentBatc
               )}
             </div>
           )})}
-        </div>
-      )}
 
+          {(!loading && (!files || files.length === 0)) && (
+            <EmptyState icon="📄" title="No files uploaded yet" description="Upload PDF files to see them here" />
+          )}
+        </div>
+      </div>
       {/* ✅ Floating Close Button — fixed properly */}
-      <button
-        onClick={onClose}
-        className="fixed bottom-6 right-6 bg-gray-800 text-white px-4 py-2 rounded-lg shadow-lg hover:bg-gray-900 transition-all z-50"
-      >
-        Close
-      </button>
-    </div>
+      {isOpen && (
+        <button
+          onClick={onClose}
+          className="fixed bottom-6 right-6 bg-gray-800 text-white px-4 py-2 rounded-lg shadow-lg hover:bg-gray-900 dark:bg-slate-700 dark:hover:bg-slate-600 transition-all z-50 min-w-[44px] min-h-[44px] flex items-center justify-center"
+          aria-label="Close uploaded files sidebar"
+        >
+          Close
+        </button>
+      )}
+    </>
   );
 };
 

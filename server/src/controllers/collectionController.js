@@ -1,14 +1,20 @@
 // server/src/controllers/collectionController.js
 // import { Collection } from '../models/Collection.js';
 import { Collection } from '../models/Collection.js';
+import logger from '../utils/logger.js';
+import cache from '../services/cache.js';
+const { KEYS } = cache;
 // Get all collections
 export const getAllCollections = async (req, res) => {
   try {
     const { customerId } = req.query;
-    const collections = await Collection.findAll(customerId);
+    const cacheKey = KEYS.COLLECTIONS_ALL(customerId);
+    const collections = await cache.getOrSet(cacheKey, async () => {
+      return await Collection.findAll(customerId);
+    });
     res.json({ success: true, data: collections });
   } catch (error) {
-    console.error('Error fetching collections:', error);
+    logger.error('Error fetching collections', { error: error?.message, stack: error?.stack });
     res.status(500).json({ success: false, error: 'Failed to fetch collections' });
   }
 };
@@ -17,16 +23,19 @@ export const getAllCollections = async (req, res) => {
 export const getCollectionById = async (req, res) => {
   try {
     const { id } = req.params;
-    const collection = await Collection.findById(id);
-    
+    const cacheKey = KEYS.COLLECTION_BY_ID(id);
+    const collection = await cache.getOrSet(cacheKey, async () => {
+      return await Collection.findById(id);
+    });
+
     if (!collection) {
       return res.status(404).json({ success: false, error: 'Collection not found' });
     }
-    
-    const stats = await collection.getStats();
+
+    const stats = await cache.getOrSet(KEYS.COLLECTION_STATS(id), async () => collection.getStats(), 60);
     res.json({ success: true, data: { ...collection, stats } });
   } catch (error) {
-    console.error('Error fetching collection:', error);
+    logger.error('Error fetching collection', { error: error?.message, stack: error?.stack });
     res.status(500).json({ success: false, error: 'Failed to fetch collection' });
   }
 };
@@ -56,7 +65,10 @@ export const createCollection = async (req, res) => {
         description: description?.trim() || '',
         customer_id,
       });
-      
+    // invalidate relevant caches
+    cache.del(KEYS.COLLECTIONS_ALL(customer_id));
+    // also clear global aggregated list to avoid stale global views
+    cache.del(KEYS.COLLECTIONS_ALL_GLOBAL);
       res.status(201).json({ success: true, data: collection });
     } catch (dbError) {
       if (dbError.code === '23505') { // Unique violation
@@ -65,7 +77,7 @@ export const createCollection = async (req, res) => {
       throw dbError; // Re-throw other errors
     }
   } catch (error) {
-    console.error('Error creating collection:', error);
+    logger.error('Error creating collection', { error: error?.message, stack: error?.stack });
     res.status(500).json({ success: false, error: 'Failed to create collection' });
   }
 };
@@ -100,9 +112,14 @@ export const updateCollection = async (req, res) => {
       return res.status(500).json({ success: false, error: 'Failed to update collection' });
     }
     
+    // invalidate caches for this collection and for the list
+  cache.del(KEYS.COLLECTION_BY_ID(id));
+  cache.del(KEYS.COLLECTION_STATS(id));
+  cache.del(KEYS.COLLECTIONS_ALL(collection.customer_id));
+  cache.del(KEYS.COLLECTIONS_ALL_GLOBAL);
     res.json({ success: true, data: updatedCollection });
   } catch (error) {
-    console.error('Error updating collection:', error);
+    logger.error('Error updating collection', { error: error?.message, stack: error?.stack });
     res.status(500).json({ success: false, error: 'Failed to update collection' });
   }
 };
@@ -121,10 +138,13 @@ export const archiveCollection = async (req, res) => {
     if (!archivedCollection) {
       return res.status(500).json({ success: false, error: 'Failed to archive collection' });
     }
-    
+  cache.del(KEYS.COLLECTION_BY_ID(id));
+  cache.del(KEYS.COLLECTION_STATS(id));
+  cache.del(KEYS.COLLECTIONS_ALL(collection.customer_id));
+  cache.del(KEYS.COLLECTIONS_ALL_GLOBAL);
     res.json({ success: true, data: archivedCollection });
   } catch (error) {
-    console.error('Error archiving collection:', error);
+    logger.error('Error archiving collection', { error: error?.message, stack: error?.stack });
     res.status(500).json({ success: false, error: 'Failed to archive collection' });
   }
 };
@@ -143,10 +163,13 @@ export const deleteCollection = async (req, res) => {
     if (!deleted) {
       return res.status(500).json({ success: false, error: 'Failed to delete collection' });
     }
-    
+  cache.del(KEYS.COLLECTION_BY_ID(id));
+  cache.del(KEYS.COLLECTION_STATS(id));
+  cache.del(KEYS.COLLECTIONS_ALL(collection.customer_id));
+  cache.del(KEYS.COLLECTIONS_ALL_GLOBAL);
     res.json({ success: true, message: 'Collection deleted successfully' });
   } catch (error) {
-    console.error('Error deleting collection:', error);
+    logger.error('Error deleting collection', { error: error?.message, stack: error?.stack });
     res.status(500).json({ success: false, error: 'Failed to delete collection' });
   }
 };

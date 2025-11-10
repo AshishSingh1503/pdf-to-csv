@@ -2,16 +2,17 @@
 import { Pool } from 'pg';
 import dotenv from 'dotenv';
 import path from 'path';
+import logger from './src/utils/logger.js';
 
 dotenv.config({ path: path.resolve('.env') });
 
-console.log('🧪 Testing database connection...');
-console.log('Environment variables:');
-console.log('DB_HOST:', process.env.DB_HOST);
-console.log('DB_PORT:', process.env.DB_PORT);
-console.log('DB_NAME:', process.env.DB_NAME);
-console.log('DB_USER:', process.env.DB_USER);
-console.log('DB_PASSWORD:', process.env.DB_PASSWORD ? '***' : 'undefined');
+logger.info('🧪 Testing database connection...');
+logger.debug('Environment variables:');
+logger.debug('DB_HOST:', process.env.DB_HOST);
+logger.debug('DB_PORT:', process.env.DB_PORT);
+logger.debug('DB_NAME:', process.env.DB_NAME);
+logger.debug('DB_USER:', process.env.DB_USER);
+logger.debug('DB_PASSWORD:', process.env.DB_PASSWORD ? '***' : 'undefined');
 
 const pool = new Pool({
   host: process.env.DB_HOST || 'localhost',
@@ -24,17 +25,17 @@ const pool = new Pool({
 
 try {
   const client = await pool.connect();
-  console.log('✅ Database connection successful!');
+  logger.info('✅ Database connection successful!');
   
   // Test query
   const result = await client.query('SELECT version()');
-  console.log('✅ Database version:', result.rows[0].version);
+  logger.info(`✅ Database version: ${result.rows[0].version}`);
   
   client.release();
   await pool.end();
-  console.log('✅ Connection closed successfully!');
+  logger.info('✅ Connection closed successfully!');
   process.exit(0);
 } catch (error) {
-  console.error('❌ Database connection failed:', error.message);
+  logger.error('❌ Database connection failed: %s', error.message);
   process.exit(1);
 }

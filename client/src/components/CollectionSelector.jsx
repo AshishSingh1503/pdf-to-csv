@@ -37,10 +37,10 @@ const CollectionSelector = ({ selectedCollection, onCollectionChange, disabled =
   if (loading) {
     return (
       <div className="mb-4">
-        <label className="block text-sm font-medium text-gray-700 mb-2">
+        <label className="block text-sm font-medium text-gray-700 dark:text-slate-200 mb-2">
           Select Collection
         </label>
-        <div className="px-3 py-2 border border-gray-300 rounded-md bg-gray-100">
+        <div className="px-3 py-2 border border-gray-300 rounded-md bg-gray-100 dark:bg-slate-700 text-slate-900 dark:text-slate-100">
           Loading collections...
         </div>
       </div>
@@ -53,23 +53,23 @@ const CollectionSelector = ({ selectedCollection, onCollectionChange, disabled =
         <label className="block text-sm font-medium text-gray-700 mb-2">
           Select Collection
         </label>
-        <div className="px-3 py-2 border border-red-300 rounded-md bg-red-50 text-red-700">
+        <div className="px-3 py-2 border border-red-300 rounded-md bg-red-50 text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-400">
           {error}
         </div>
       </div>
     );
   }
 
-  return (
+    return (
     <div className="mb-4">
-      <label className="block text-sm font-medium text-gray-700 mb-2">
+      <label className="block text-sm font-medium text-gray-700 dark:text-slate-200 mb-2">
         Select Collection *
       </label>
       <select
         value={selectedCollection ? selectedCollection.id : ''}
         onChange={handleCollectionChange}
         disabled={disabled}
-        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100 disabled:cursor-not-allowed"
+        className="w-full px-3 py-2 border border-gray-300 rounded-md bg-white dark:bg-slate-700 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100 disabled:cursor-not-allowed"
         required
       >
         <option value="">Choose a collection...</option>
@@ -80,10 +80,10 @@ const CollectionSelector = ({ selectedCollection, onCollectionChange, disabled =
         ))}
       </select>
       {selectedCollection && (
-        <div className="mt-1 text-sm text-gray-600">
+        <div className="mt-1 text-sm text-gray-600 dark:text-slate-300">
           Selected: {selectedCollection.name}
           {selectedCollection.description && (
-            <span className="block text-gray-500">{selectedCollection.description}</span>
+            <span className="block text-gray-500 dark:text-slate-400">{selectedCollection.description}</span>
           )}
         </div>
       )}

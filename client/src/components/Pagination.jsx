@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect } from "react";
 
 const Pagination = ({ currentPage, totalPages, onPageChange }) => {
   const handlePrevious = () => {
@@ -28,8 +28,8 @@ const Pagination = ({ currentPage, totalPages, onPageChange }) => {
           onClick={() => onPageChange(i)}
           className={`inline-flex items-center justify-center min-w-[36px] px-3 py-1.5 border text-sm font-medium transition-all duration-150 ${
             currentPage === i
-              ? "bg-indigo-600 text-white border-indigo-600"
-              : "bg-white border-gray-300 text-gray-600 hover:bg-gray-100"
+              ? "bg-indigo-600 text-white border-indigo-600 dark:bg-indigo-500 dark:border-indigo-500"
+              : "bg-white border-gray-300 text-gray-600 hover:bg-gray-100 dark:bg-gray-700 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-600"
           } rounded-md`}
         >
           {i}
@@ -40,14 +40,27 @@ const Pagination = ({ currentPage, totalPages, onPageChange }) => {
     return pageNumbers;
   };
 
+  useEffect(() => {
+    const handler = (e) => {
+      if (e.key === 'ArrowLeft') {
+        if (currentPage > 1) onPageChange(currentPage - 1)
+      }
+      if (e.key === 'ArrowRight') {
+        if (currentPage < totalPages) onPageChange(currentPage + 1)
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [currentPage, totalPages, onPageChange])
+
   return (
-    <div className="w-full flex flex-col sm:flex-row items-center justify-between gap-3 sm:gap-6 px-3 sm:px-6 py-3 bg-white border-t border-gray-200">
+    <div className="w-full flex flex-col sm:flex-row items-center justify-between gap-3 sm:gap-6 px-3 sm:px-6 py-3 bg-white dark:bg-slate-800 border-t border-gray-200 dark:border-slate-700 text-slate-900 dark:text-slate-100">
       {/* Mobile View (Compact) */}
       <div className="flex items-center justify-between w-full sm:hidden">
         <button
           onClick={handlePrevious}
           disabled={currentPage === 1}
-          className="flex-1 mr-2 inline-flex items-center justify-center px-3 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50"
+          className="flex-1 mr-2 inline-flex items-center justify-center px-3 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600 dark:disabled:bg-gray-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 active:scale-95 transition-transform"
         >
           Prev
         </button>
@@ -57,7 +70,7 @@ const Pagination = ({ currentPage, totalPages, onPageChange }) => {
         <button
           onClick={handleNext}
           disabled={currentPage === totalPages}
-          className="flex-1 ml-2 inline-flex items-center justify-center px-3 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50"
+          className="flex-1 ml-2 inline-flex items-center justify-center px-3 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600 dark:disabled:bg-gray-800"
         >
           Next
         </button>
@@ -77,7 +90,7 @@ const Pagination = ({ currentPage, totalPages, onPageChange }) => {
           <button
             onClick={handlePrevious}
             disabled={currentPage === 1}
-            className="inline-flex items-center justify-center px-3 py-2 border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50 rounded-md disabled:opacity-50"
+            className="inline-flex items-center justify-center px-3 py-2 border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50 rounded-md disabled:opacity-50 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 active:scale-95 transition-transform"
           >
             <svg
               className="h-4 w-4"
@@ -95,7 +108,7 @@ const Pagination = ({ currentPage, totalPages, onPageChange }) => {
           <button
             onClick={handleNext}
             disabled={currentPage === totalPages}
-            className="inline-flex items-center justify-center px-3 py-2 border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50 rounded-md disabled:opacity-50"
+            className="inline-flex items-center justify-center px-3 py-2 border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50 rounded-md disabled:opacity-50 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 active:scale-95 transition-transform"
           >
             <svg
               className="h-4 w-4"
@@ -111,6 +124,7 @@ const Pagination = ({ currentPage, totalPages, onPageChange }) => {
       </div>
     </div>
   );
+
 };
 
 export default Pagination;

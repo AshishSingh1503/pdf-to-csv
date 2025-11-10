@@ -1,18 +1,20 @@
 // server/src/services/websocket.js
 import { WebSocketServer } from 'ws';
+import { config } from '../config/index.js';
+import logger from '../utils/logger.js';
 
 let wss;
 
 export const initWebSocket = (server) => {
-  const wsPath = process.env.WS_PATH || '/ws';
-  console.log(`🔌 Initializing WebSocket server (path=${wsPath})`);
+  const wsPath = config.wsPath || '/ws';
+  logger.info(`Initializing WebSocket server (path=${wsPath})`);
   // Let the ws library enforce the path; pass path to the constructor
   wss = new WebSocketServer({ server, path: wsPath });
 
   wss.on('connection', (ws, req) => {
-    console.log('Client connected via WS path', wsPath);
+    logger.info('Client connected via WS path', { path: wsPath });
     ws.on('close', () => {
-      console.log('Client disconnected');
+      logger.info('Client disconnected');
     });
   });
 };
@@ -24,7 +26,7 @@ export const broadcast = (data) => {
   // optional debug: log batch events for easier debugging
   try {
     if (data && typeof data.type === 'string' && data.type.startsWith('BATCH_')) {
-      console.log('📡 Broadcasting batch event:', data.type, 'batchId:', data.batchId);
+      logger.debug('Broadcasting batch event', { type: data.type, batchId: data.batchId });
     }
   } catch (e) {
     // ignore logging errors
@@ -37,10 +39,10 @@ export const broadcast = (data) => {
           client.send(JSON.stringify(data));
         }
       } catch (sendErr) {
-        console.warn('⚠️  Failed to send WS message to a client:', sendErr && sendErr.message);
+        logger.warn('Failed to send WS message to a client', { error: sendErr?.message });
       }
     });
   } catch (e) {
-    console.warn('⚠️  Error iterating websocket clients:', e && e.message);
+    logger.warn('Error iterating websocket clients', { error: e?.message, stack: e?.stack });
   }
 };

@@ -1,6 +1,7 @@
 // server/src/services/cloudStorage.js
 import { Storage } from '@google-cloud/storage';
 import { config } from '../config/index.js';
+import logger from '../utils/logger.js';
 import path from 'path';
 import fs from 'fs';
 
@@ -41,12 +42,12 @@ export class CloudStorageService {
           });
 
           stream.on('error', (error) => {
-            console.error('Upload error:', error);
+            logger.error('Upload error:', error);
             reject(error);
           });
 
           stream.on('finish', () => {
-            console.log(`✅ Uploaded ${file.name} to Cloud Storage`);
+            logger.info(`Uploaded ${file.name} to Cloud Storage`);
             resolve({
               fileName: fileName,
               originalName: file.name,
@@ -61,7 +62,7 @@ export class CloudStorageService {
 
         uploadPromises.push(uploadPromise);
       } catch (error) {
-        console.error(`Error uploading ${file.name}:`, error);
+        logger.error(`Error uploading ${file.name}:`, error);
         uploadPromises.push(Promise.reject(error));
       }
     }
@@ -70,7 +71,7 @@ export class CloudStorageService {
       const results = await Promise.all(uploadPromises);
       uploadedFiles.push(...results);
     } catch (error) {
-      console.error('Some files failed to upload:', error);
+      logger.error('Some files failed to upload:', error);
     }
 
     return uploadedFiles;
@@ -100,14 +101,14 @@ export class CloudStorageService {
           });
 
           stream.on('error', reject);
-          stream.on('finish', () => {
-            console.log(`✅ Uploaded CSV to Cloud Storage: ${csvFileName}`);
-            resolve({
-              fileName: csvFileName,
-              type: 'csv',
-              url: `gs://${config.outputBucket}/${csvFileName}`
+            stream.on('finish', () => {
+              logger.info(`Uploaded CSV to Cloud Storage: ${csvFileName}`);
+              resolve({
+                fileName: csvFileName,
+                type: 'csv',
+                url: `gs://${config.outputBucket}/${csvFileName}`
+              });
             });
-          });
 
           stream.end(csvBuffer);
         });
@@ -134,7 +135,7 @@ export class CloudStorageService {
 
           stream.on('error', reject);
           stream.on('finish', () => {
-            console.log(`✅ Uploaded Excel to Cloud Storage: ${excelFileName}`);
+            logger.info(`Uploaded Excel to Cloud Storage: ${excelFileName}`);
             resolve({
               fileName: excelFileName,
               type: 'excel',
@@ -152,7 +153,7 @@ export class CloudStorageService {
       uploadedFiles.push(...results);
 
     } catch (error) {
-      console.error('Error uploading processed data:', error);
+      logger.error('Error uploading processed data:', error);
       throw error;
     }
 
@@ -169,7 +170,7 @@ export class CloudStorageService {
       });
       return signedUrl;
     } catch (error) {
-      console.error('Error generating signed URL:', error);
+      logger.error('Error generating signed URL:', error);
       throw error;
     }
   }
@@ -188,7 +189,7 @@ export class CloudStorageService {
         url: `gs://${config.outputBucket}/${file.name}`
       }));
     } catch (error) {
-      console.error('Error listing collection files:', error);
+      logger.error('Error listing collection files:', error);
       throw error;
     }
   }
@@ -197,9 +198,9 @@ export class CloudStorageService {
   static async deleteFile(fileName) {
     try {
       await outputBucket.file(fileName).delete();
-      console.log(`✅ Deleted file from Cloud Storage: ${fileName}`);
+      logger.info(`Deleted file from Cloud Storage: ${fileName}`);
     } catch (error) {
-      console.error('Error deleting file:', error);
+      logger.error('Error deleting file:', error);
       throw error;
     }
   }
@@ -212,7 +213,7 @@ export class CloudStorageService {
       await outputBucket.file(fileName).download({ destination: tempPath });
       return tempPath;
     } catch (error) {
-      console.error('Error downloading file:', error);
+      logger.error('Error downloading file:', error);
       throw error;
     }
   }
