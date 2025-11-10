@@ -17,6 +17,151 @@ import xlsx from "xlsx";
 import { saveFiles, createZip } from '../utils/fileHelpers.js';
 import { broadcast } from '../services/websocket.js';
 import logger from '../utils/logger.js';
+import batchQueueManager from '../services/batchQueueManager.js';
+import { config } from '../config/index.js';
+
+// Listen to queue events to broadcast queue state to clients
+batchQueueManager.on('batch:enqueued', ({ batchId, collectionId, fileCount, position, estimatedWaitTime, totalQueued, queueStatus }) => {
+  try {
+    // Include queue metadata to help clients show position and ETA
+    const payload = { type: 'BATCH_QUEUED', batchId, collectionId, fileCount, position, estimatedWaitTime, totalQueued, queueStatus, timestamp: new Date().toISOString() };
+    broadcast(payload);
+    logger.info('Broadcasted BATCH_QUEUED', { batchId, position, estimatedWaitTime, totalQueued });
+  } catch (e) {
+    logger.warn('Failed to broadcast BATCH_QUEUED', e && e.message);
+  }
+});
+
+batchQueueManager.on('batch:dequeued', async ({ batchId, collectionId, fileCount, startedAt, totalQueued, activeCount, availableSlots }) => {
+  try {
+    // when the queue manager starts a batch, emit both a BATCH_DEQUEUED and the official started event
+    // Attempt to fetch file metadata for richer client payloads (best-effort)
+    let files = [];
+    try {
+      files = await FileMetadata.findByBatchId(batchId);
+    } catch (e) {
+      logger.warn('Unable to fetch FileMetadata for dequeued batch', e && e.message);
+      files = [];
+    }
+
+    const fc = typeof fileCount === 'number' ? fileCount : (Array.isArray(files) ? files.length : undefined);
+
+    // Use the startedAt provided by the queue manager so timestamps are consistent
+    const started = startedAt || new Date().toISOString();
+
+    const payload = { batchId, collectionId, fileCount: fc, files, startedAt: started, totalQueued, activeCount, availableSlots };
+
+    try {
+      // Broadcast a specific dequeued event first
+      broadcast({ type: 'BATCH_DEQUEUED', ...payload, timestamp: new Date().toISOString() });
+      logger.info('Broadcasted BATCH_DEQUEUED', { batchId, totalQueued, activeCount, availableSlots });
+    } catch (e) {
+      logger.warn('Failed to broadcast BATCH_DEQUEUED', e && e.message);
+    }
+
+    try {
+      // Backwards-compatible started event
+      broadcast({ type: 'BATCH_PROCESSING_STARTED', ...payload, timestamp: new Date().toISOString() });
+      logger.info('Broadcasted BATCH_PROCESSING_STARTED from queue', { batchId, totalQueued, activeCount, availableSlots });
+    } catch (e) {
+      logger.warn('Failed to broadcast BATCH_PROCESSING_STARTED from queue', e && e.message);
+    }
+  } catch (e) {
+    logger.warn('Failed in batch:dequeued handler', e && e.message);
+  }
+});
+
+batchQueueManager.on('batch:completed', ({ batchId, collectionId, totalQueued, activeCount, availableSlots }) => {
+  try {
+    const payload = { type: 'BATCH_QUEUE_COMPLETED', batchId, collectionId, totalQueued, activeCount, availableSlots, timestamp: new Date().toISOString() };
+    broadcast(payload);
+    logger.info('Broadcasted BATCH_QUEUE_COMPLETED', { batchId, collectionId, totalQueued, activeCount, availableSlots });
+  } catch (e) {
+    logger.warn('Failed to broadcast BATCH_QUEUE_COMPLETED', e && e.message);
+  }
+});
+
+// Queue full: broadcast to clients so uploaders get immediate feedback
+batchQueueManager.on('queue:full', ({ batchId, queueLength, maxLength, collectionId }) => {
+  try {
+    const payload = { type: 'QUEUE_FULL', batchId, collectionId, queueLength, maxLength, message: 'Server is at capacity. Please try again in a few minutes.', timestamp: new Date().toISOString() };
+    broadcast(payload);
+    logger.warn('Broadcasted QUEUE_FULL', { batchId, collectionId, queueLength, maxLength });
+  } catch (e) {
+    logger.warn('Failed to broadcast QUEUE_FULL', e && e.message);
+  }
+});
+
+// Batch timeout: notify clients that a batch has been failed due to timeout
+batchQueueManager.on('batch:timeout', async ({ batchId, timeoutMs }) => {
+  try {
+    // Mark files for this batch as failed to avoid leaving them stuck in 'processing'
+    try {
+      const files = await FileMetadata.findByBatchId(batchId);
+      if (Array.isArray(files) && files.length > 0) {
+        const updated = [];
+        for (const meta of files) {
+          try {
+            const status = (meta.processing_status || '').toLowerCase();
+            if (status === 'processing') {
+              const latest = await FileMetadata.findById(meta.id);
+              if (latest) {
+                const changed = await latest.updateStatus('failed');
+                updated.push(changed || latest);
+              }
+            } else {
+              updated.push(meta);
+            }
+          } catch (e) {
+            logger.warn('Failed to mark file as failed after batch timeout', { batchId, fileId: meta && meta.id, err: e && e.message });
+          }
+        }
+
+        // Broadcast per-file FILES_PROCESSED events so UI updates deterministically
+        try {
+          const fileBroadcasts = (updated || []).map(async (metadata) => {
+            if (!metadata) return null;
+            const camel = normalizeMetadata(metadata);
+            const cid = metadata.collection_id || metadata.collectionId || null;
+            broadcast({ type: 'FILES_PROCESSED', batchId, collectionId: cid, fileMetadata: camel, file_metadata: metadata });
+          });
+          await Promise.all(fileBroadcasts);
+        } catch (e) {
+          logger.warn('Failed to broadcast per-file FILES_PROCESSED after timeout', e && e.message);
+        }
+      }
+    } catch (e) {
+      logger.warn('Error while marking files failed on batch timeout', { batchId, err: e && e.message });
+    }
+
+    // Keep existing batch-level failure broadcast
+    try {
+      const payload = { type: 'BATCH_PROCESSING_FAILED', batchId, error: 'Batch processing timeout exceeded', timeoutMs, timestamp: new Date().toISOString() };
+      broadcast(payload);
+      logger.error('Broadcasted batch timeout failure', { batchId, timeoutMs });
+    } catch (e) {
+      logger.warn('Failed to broadcast batch timeout', e && e.message);
+    }
+  } catch (e) {
+    logger.warn('Failed in batch:timeout handler', e && e.message);
+  }
+});
+
+// Listen for position update events from the queue manager and forward to clients
+batchQueueManager.on('batch:position-updated', ({ batchId, collectionId, position, estimatedWaitTime, totalQueued, reason }) => {
+  try {
+    const payload = { type: 'BATCH_QUEUE_POSITION_UPDATED', batchId, collectionId, position, estimatedWaitTime, totalQueued, reason, timestamp: new Date().toISOString() };
+    broadcast(payload);
+    logger.debug('Broadcasted BATCH_QUEUE_POSITION_UPDATED', { batchId, position, estimatedWaitTime, reason });
+  } catch (e) {
+    logger.warn('Failed to broadcast BATCH_QUEUE_POSITION_UPDATED', e && e.message);
+  }
+});
+
+// Log document controller startup and queue configuration
+try {
+  logger.info('Document controller initialized with queue configuration', { maxConcurrentBatches: config.maxConcurrentBatches, enableQueueLogging: config.enableQueueLogging });
+} catch (e) { /* ignore logging errors */ }
 
 // Helper: normalize metadata to camelCase for client consumption while keeping snake_case fallback
 const normalizeMetadata = (meta) => {
@@ -76,6 +221,18 @@ export const processDocuments = async (req, res) => {
     // include a startedAt timestamp so clients opening mid-batch can align elapsed time
     const startedAt = new Date().toISOString();
 
+    // Check whether the queue can accept this new batch before creating DB records
+    try {
+      if (!batchQueueManager.canAcceptNewBatch()) {
+        logger.warn('Upload rejected: queue at capacity before creating file metadata', { batchId, collectionId: collectionIdNum });
+        // Notify uploader immediately
+        try { broadcast({ type: 'QUEUE_FULL', batchId, collectionId: collectionIdNum, queueLength: batchQueueManager.queue.length, maxLength: batchQueueManager.MAX_QUEUE_LENGTH, message: 'Server is at capacity. Please try again in a few minutes.' }) } catch (e) {}
+        return res.status(503).json({ success: false, error: 'Server is at capacity. Please try again in a few minutes.', queueFull: true });
+      }
+    } catch (e) {
+      logger.warn('Failed to check queue capacity; proceeding with enqueue', e && e.message);
+    }
+
     const fileMetadataPromises = fileArray.map(file => {
       return FileMetadata.create({
         collection_id: collectionIdNum,
@@ -87,24 +244,86 @@ export const processDocuments = async (req, res) => {
     });
     const fileMetadatas = await Promise.all(fileMetadataPromises);
 
-    res.json({
+    // Enqueue the batch for processing via BatchQueueManager
+    // Use the shared processor wrapper that adapts our processor to the queue manager
+    const processorFunction = processBatchWrapper;
+
+    let position;
+    try {
+      position = batchQueueManager.enqueue({ batchId, collectionId: collectionIdNum, fileArray, fileMetadatas, fileCount: fileArray.length, processorFunction });
+      // Recompute effective position because enqueue may return a transient value
+      // Ensure clients receive accurate position (0 = processing started)
+      try {
+        const recalculated = batchQueueManager.getQueuePosition(batchId);
+        if (typeof recalculated === 'number') {
+          position = recalculated;
+        }
+      } catch (e) {
+        logger.warn('Unable to recalculate queue position after enqueue', e && e.message);
+      }
+
+      logger.info(`Enqueued batch ${batchId} collection ${collectionIdNum} files=${fileArray.length} position=${position}`);
+
+      // Fetch overall queue status and include in response so clients get metadata (length, slots, averages)
+      let queueStatus = null
+      try {
+        queueStatus = batchQueueManager.getQueueStatus()
+      } catch (e) {
+        logger.warn('Unable to fetch queue status after enqueue', e && e.message)
+        queueStatus = null
+      }
+
+      if (position === -1) {
+        // validation failure reported by queue manager
+        logger.error(`Batch enqueue validation failed for batch ${batchId}`);
+        // mark all created file metadata as failed to avoid leaving them stuck in 'processing'
+        try {
+          await Promise.all(fileMetadatas.map(async (m) => {
+            try {
+              const latest = await FileMetadata.findById(m.id);
+              if (latest) await latest.updateStatus('failed');
+            } catch (e) { /* best-effort */ }
+          }));
+        } catch (e) { /* ignore */ }
+        // If the rejection was likely due to queue capacity, return 503 so clients can retry later
+        try {
+          const likelyQueueFull = (batchQueueManager.queue.length >= batchQueueManager.MAX_QUEUE_LENGTH && batchQueueManager.activeSlots.size >= batchQueueManager.maxConcurrentBatches);
+          if (likelyQueueFull) {
+            return res.status(503).json({ success: false, error: 'Server is at capacity. Please try again in a few minutes.', queueFull: true });
+          }
+        } catch (e) {
+          // ignore and fallthrough to generic 500
+        }
+        return res.status(500).json({ success: false, error: 'Failed to enqueue batch for processing' });
+      }
+    } catch (e) {
+      logger.error('Exception while enqueueing batch:', e && e.message);
+      try {
+        await Promise.all(fileMetadatas.map(async (m) => {
+          try {
+            const latest = await FileMetadata.findById(m.id);
+            if (latest) await latest.updateStatus('failed');
+          } catch (e) { /* best-effort */ }
+        }));
+      } catch (e) { /* ignore */ }
+      return res.status(500).json({ success: false, error: 'Failed to enqueue batch for processing' });
+    }
+
+    // Respond to client with metadata, batchId and queue position (0 = processing, >0 = queued)
+    const responsePayload = {
       success: true,
-      files: fileMetadatas,
-      message: `Successfully uploaded ${fileArray.length} file(s). Processing in background.`,
-    });
-
-    // Emit batch start event (include startedAt to help clients show elapsed time accurately)
-    broadcast({
-      type: 'BATCH_PROCESSING_STARTED',
       batchId,
-      collectionId: collectionIdNum,
-      fileCount: fileArray.length,
       files: fileMetadatas,
-      startedAt
-    });
-
-    // FIXED: Process all files in the background in PARALLEL
-    processPDFFilesParallel(fileArray, collectionIdNum, fileMetadatas, batchId, startedAt);
+      position,
+      message: position === 0 ? `Successfully uploaded ${fileArray.length} file(s). Processing started.` : `Successfully uploaded ${fileArray.length} file(s). Queued at position ${position}.`,
+    }
+    if (queueStatus) {
+      responsePayload.queueLength = queueStatus.queueLength
+      responsePayload.availableSlots = queueStatus.availableSlots
+      responsePayload.averageWaitTimeSeconds = queueStatus.averageWaitTimeSeconds
+      responsePayload.estimatedWaitTime = (typeof position === 'number') ? batchQueueManager.estimateWaitTime(position) : null
+    }
+    res.json(responsePayload)
 
   } catch (err) {
     logger.error("Error in processDocuments:", err);
@@ -871,5 +1090,32 @@ export const getBatchStatus = async (req, res) => {
   } catch (err) {
     logger.error('Error in getBatchStatus:', err);
     res.status(500).json({ error: err.message });
+  }
+};
+
+// Adapter wrapper so the BatchQueueManager can call the processor with a single object argument.
+// This wrapper preserves logging, error propagation, and ensures the returned promise reflects
+// the underlying processing result so the queue manager can release slots appropriately.
+const processBatchWrapper = async ({ fileArray, collectionId, fileMetadatas, batchId, startedAt }) => {
+  try {
+    logger.info(`processBatchWrapper: starting batch=${batchId} collection=${collectionId} fileCount=${Array.isArray(fileArray) ? fileArray.length : 0}`);
+    const result = await processPDFFilesParallel(fileArray, collectionId, fileMetadatas, batchId, startedAt);
+    logger.info(`processBatchWrapper: completed batch=${batchId}`);
+    return result;
+  } catch (err) {
+    logger.error(`processBatchWrapper: error for batch=${batchId}:`, err && err.message);
+    // re-throw so the queue manager can catch and release slots
+    throw err;
+  }
+};
+
+// Monitoring endpoint: return queue status from BatchQueueManager
+export const getQueueStatus = async (req, res) => {
+  try {
+    const status = batchQueueManager.getQueueStatus();
+    return res.json({ success: true, status });
+  } catch (err) {
+    logger.error('Error in getQueueStatus:', err && err.message);
+    return res.status(500).json({ success: false, error: err.message });
   }
 };

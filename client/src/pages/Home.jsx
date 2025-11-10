@@ -70,35 +70,76 @@ const Home = () => {
     setCurrentBatch(0);
 
     try {
+      let abortedDueToCapacity = false;
       for (let i = 0; i < fileChunks.length; i++) {
         const batch = fileChunks[i];
         setCurrentBatch(i + 1);
         console.log(`Uploading batch ${i + 1}/${fileChunks.length}...`);
 
-        await uploadAndProcess(batch, collectionId, (progressEvent) => {
-          setUploadProgress(prev => {
-            try {
-              if (progressEvent && progressEvent.total && progressEvent.total > 0) {
-                const pct = Math.round((progressEvent.loaded * 100) / progressEvent.total);
-                return Math.max(0, Math.min(100, pct));
+        try {
+          const data = await uploadAndProcess(batch, collectionId, (progressEvent) => {
+            setUploadProgress(prev => {
+              try {
+                if (progressEvent && progressEvent.total && progressEvent.total > 0) {
+                  const pct = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+                  return Math.max(0, Math.min(100, pct));
+                }
+                // Some XHR implementations may provide a fractional loaded (0-1)
+                if (progressEvent && typeof progressEvent.loaded === 'number' && progressEvent.loaded >= 0 && progressEvent.loaded <= 1) {
+                  return Math.max(0, Math.min(100, Math.round(progressEvent.loaded * 100)));
+                }
+              } catch (err) {
+                // fall through to return previous
               }
-              // Some XHR implementations may provide a fractional loaded (0-1)
-              if (progressEvent && typeof progressEvent.loaded === 'number' && progressEvent.loaded >= 0 && progressEvent.loaded <= 1) {
-                return Math.max(0, Math.min(100, Math.round(progressEvent.loaded * 100)));
-              }
-            } catch (err) {
-              // fall through to return previous
-            }
-            return prev || 0;
+              return prev || 0;
+            });
           });
-        });
 
-        // Optional pause between batches
-        await new Promise((resolve) => setTimeout(resolve, 1000));
+          // If server accepted but returned queued position, surface a light notification so users know ETA
+          try {
+            if (data && data.position !== undefined && data.position > 0) {
+              const eta = data.estimatedWaitTime ? ` Estimated wait: ${data.estimatedWaitTime}s.` : '';
+              showSuccess(`Batch queued at position ${data.position}.${eta}`);
+            }
+          } catch (e) {
+            // ignore toast failures
+          }
+
+          // Optional pause between batches
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+        } catch (err) {
+          // Axios-like error handling to detect HTTP 503 + queueFull responses
+          const resp = err && err.response;
+          if (resp && resp.status === 503) {
+            const d = resp.data || {};
+            const serverMsg = d.error || d.message || 'Server is at capacity. Please try again in a few minutes.';
+            let extra = '';
+            try {
+              if (d.queueFull) {
+                if (d.estimatedWaitTime) extra = ` Estimated wait: ${d.estimatedWaitTime}s.`;
+                else if (typeof d.position === 'number') extra = ` Position: ${d.position}.`;
+                else if (typeof d.queueLength === 'number') extra = ` Queue length: ${d.queueLength}.`;
+              }
+            } catch (e) {}
+
+            showError(`Server busy: ${serverMsg}${extra}`);
+            // stop further batches and let the upload UI reset in finally
+            abortedDueToCapacity = true;
+            break;
+          }
+
+          // For other errors, rethrow so outer catch handles generic failures
+          throw err;
+        }
       }
 
       await fetchData();
-      showSuccess(`✅ Successfully uploaded ${newFiles.length} file(s) in ${fileChunks.length} batch(es).`);
+      if (!abortedDueToCapacity) {
+        showSuccess(`✅ Successfully uploaded ${newFiles.length} file(s) in ${fileChunks.length} batch(es).`);
+      } else {
+        // If aborted due to capacity, refresh UI and notify user they can retry later
+        showError('Upload paused: server at capacity. Some files may not have been queued. Please try again in a few minutes.');
+      }
     } catch (error) {
       console.error("Upload error:", error);
       showError("❌ Failed to process some files. Please try again.");

@@ -6,6 +6,7 @@ import collectionRoutes from "./routes/collectionRoutes.js";
 import customerRoutes from "./routes/customerRoutes.js";
 import dataRoutes from "./routes/dataRoutes.js";
 import testRoutes from "./routes/testRoutes.js";
+import adminRoutes from "./routes/adminRoutes.js";
 import { initializeDatabase } from "./models/database.js";
 import logger from './utils/logger.js';
 
@@ -39,5 +40,7 @@ app.use("/api/collections", collectionRoutes);
 app.use("/api/customers", customerRoutes);
 app.use("/api/data", dataRoutes);
 app.use("/api/test", testRoutes);
+// Admin routes (internal use only)
+app.use("/api/admin", adminRoutes);
 
 export default app;

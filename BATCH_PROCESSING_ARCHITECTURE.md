@@ -64,3 +64,19 @@ Index on `batch_id` for efficient queries by batch.
 - Implement WebSocket channel scoping (only broadcast to clients subscribed to the collection) to reduce noise.
 - Add a retry/cancel API for batches.
 - Add server-side metrics for batch durations and success rates.
+
+## Queue System (FIFO, capacity, timeouts)
+
+This project uses a server-side FIFO BatchQueueManager to control concurrency and provide predictable
+behaviour under load. Key points:
+
+- The `BatchQueueManager` maintains a queue of pending batches and a fixed number of active slots
+  controlled by `MAX_CONCURRENT_BATCHES`.
+- To protect memory and provide backpressure, the queue rejects new enqueues when `MAX_QUEUE_LENGTH` is reached.
+- Per-batch timeouts (`BATCH_QUEUE_TIMEOUT`) ensure stuck processors do not hold slots indefinitely; timed-out
+  batches emit `batch:timeout` and are released.
+- The queue emits enriched events over WebSocket: `BATCH_QUEUED`, `BATCH_QUEUE_POSITION_UPDATED`, `BATCH_DEQUEUED`,
+  `BATCH_PROCESSING_STARTED`, `BATCH_PROCESSING_COMPLETED`, and `QUEUE_FULL` when the queue rejects due to capacity.
+- Clients should handle `QUEUE_FULL` (HTTP 503 or WS broadcast) and retry with backoff.
+
+See `QUEUE_SYSTEM.md` for a full description, event contracts, and operational guidance.

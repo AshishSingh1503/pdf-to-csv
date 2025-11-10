@@ -26,7 +26,15 @@ export const broadcast = (data) => {
   // optional debug: log batch events for easier debugging
   try {
     if (data && typeof data.type === 'string' && data.type.startsWith('BATCH_')) {
-      logger.debug('Broadcasting batch event', { type: data.type, batchId: data.batchId });
+      // include common batch metadata where available
+      const dbg = { type: data.type, batchId: data.batchId };
+      if (typeof data.position === 'number') dbg.position = data.position;
+      if (typeof data.estimatedWaitTime === 'number') dbg.estimatedWaitTime = data.estimatedWaitTime;
+      if (typeof data.totalQueued === 'number') dbg.totalQueued = data.totalQueued;
+      logger.debug('Broadcasting batch event', dbg);
+      if (data.type === 'BATCH_QUEUE_POSITION_UPDATED') {
+        logger.debug('Queue position updated', { batchId: data.batchId, position: data.position });
+      }
     }
   } catch (e) {
     // ignore logging errors
