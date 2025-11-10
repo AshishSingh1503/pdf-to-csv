@@ -89,6 +89,30 @@ Date: 2025-11-09
 - If files are stuck in `processing`, inspect server logs for exceptions in `processPDFFilesParallel` and confirm `clearInterval` is being executed.
 - Use React DevTools to inspect `UploadedFilesSidebar` state (`activeBatches`, `batchMessages`, `files`).
 
+## Queue-related Tests
+
+These tests focus on the BatchQueueManager behaviour and should be run in an isolated environment.
+
+1. Queue Overflow (MAX_QUEUE_LENGTH)
+   - Configure `MAX_QUEUE_LENGTH` to a small value (e.g., 3) in a test env.
+   - Rapidly send 10 concurrent upload requests. Expect:
+     - First N requests accepted (where N depends on active slots and queue length), subsequent requests receive HTTP 503 with `{ queueFull: true }`.
+     - A `QUEUE_FULL` WebSocket broadcast is emitted when the queue rejects.
+
+2. Per-batch Timeout
+   - Set `BATCH_QUEUE_TIMEOUT` to a low value (e.g., 5000 ms).
+   - Start a batch that intentionally hangs in the processor (mock the processor to sleep longer).
+   - Expect `batch:timeout` event, `BATCH_PROCESSING_FAILED` broadcast, slot release, and that subsequent queued batches start.
+
+3. Position Update Debouncing
+   - Enqueue several batches and trigger multiple position-changing events quickly (enqueue/dequeue).
+   - Verify that `BATCH_QUEUE_POSITION_UPDATED` events are debounced by the configured interval and that counters in `/api/admin/queue-metrics` show `positionUpdatesEmitted` and `positionUpdatesSuppressed` metrics.
+
+4. Graceful Shutdown
+   - With `ENABLE_GRACEFUL_SHUTDOWN=true`, start a long-running batch and send SIGTERM to the server.
+   - Verify the server calls `prepareShutdown()`, waits up to `GRACEFUL_SHUTDOWN_TIMEOUT` for active batches, and exits gracefully.
+   - With `ENABLE_GRACEFUL_SHUTDOWN=false`, the server should close immediately without waiting for active batches.
+
 ## Quick commands
 
 Run server (example, adjust to your project scripts):

@@ -1,14 +1,15 @@
 // server/test-db.js
 import { initializeDatabase } from './src/models/database.js';
+import logger from './src/utils/logger.js';
 
-console.log('🧪 Testing database connection...');
+logger.info('🧪 Testing database connection...');
 
 try {
   await initializeDatabase();
-  console.log('✅ Database connection successful!');
-  console.log('✅ Tables created successfully!');
+  logger.info('✅ Database connection successful!');
+  logger.info('✅ Tables created successfully!');
   process.exit(0);
 } catch (error) {
-  console.error('❌ Database connection failed:', error.message);
+  logger.error('❌ Database connection failed: %s', error.message);
   process.exit(1);
 }

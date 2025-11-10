@@ -1,7 +1,9 @@
 import React from "react";
 import { apiClient } from "../api/apiClient";
+import { useToast } from '../contexts/ToastContext'
 
 const Footer = ({ customer, isPostProcess, onToggleProcess, sortField, onClearSort, selectedCollection }) => {
+  const { showError } = useToast()
   const handleDownload = (fileType) => {
     if (selectedCollection) {
       const type = isPostProcess ? 'post' : 'pre';
@@ -12,13 +14,13 @@ const Footer = ({ customer, isPostProcess, onToggleProcess, sortField, onClearSo
       url += `?type=${type}`;
       window.open(url, "_blank");
     } else {
-      alert("Please select a collection to download.");
+      showError("Please select a collection to download")
     }
   };
 
   const handleDownloadSummary = () => {
     if (!selectedCollection || !selectedCollection.id) {
-      alert("Please select a collection to download.");
+      showError("Please select a collection to download")
       return;
     }
 
@@ -28,10 +30,10 @@ const Footer = ({ customer, isPostProcess, onToggleProcess, sortField, onClearSo
   };
 
   return (
-    <div className="bg-white px-4 py-3 flex items-center justify-between border-t border-gray-200 sm:px-6">
+    <div className="bg-white dark:bg-slate-800 px-4 py-3 flex items-center justify-between border-t border-gray-200 dark:border-slate-700 sm:px-6 text-slate-900 dark:text-slate-100">
       <div>
         {customer && (
-          <p className="text-sm text-gray-500">
+          <p className="text-sm text-slate-600 dark:text-slate-300">
             Customer: {customer.name}
           </p>
         )}
@@ -48,7 +50,7 @@ const Footer = ({ customer, isPostProcess, onToggleProcess, sortField, onClearSo
         </label>
         {sortField && (
           <button
-            className="bg-gray-500 text-white px-3 py-1 rounded text-sm hover:bg-gray-600"
+            className="bg-gray-500 text-white px-3 py-1 rounded text-sm hover:bg-gray-600 dark:bg-gray-600 dark:hover:bg-gray-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-blue-500 active:scale-95 transition-transform"
             onClick={onClearSort}
             title="Clear sorting"
           >
@@ -56,7 +58,7 @@ const Footer = ({ customer, isPostProcess, onToggleProcess, sortField, onClearSo
           </button>
         )}
         <button
-          className={`bg-blue-600 text-white px-4 py-2 rounded ${!selectedCollection ? 'opacity-50 cursor-not-allowed' : 'hover:bg-blue-700'}`}
+          className={`bg-blue-600 text-white px-4 py-2 rounded ${!selectedCollection ? 'opacity-50 cursor-not-allowed' : 'hover:bg-blue-700'} dark:bg-blue-600 dark:hover:bg-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-blue-500 active:scale-95 transition-transform`}
           onClick={() => handleDownload('csv')}
           disabled={!selectedCollection}
           aria-disabled={!selectedCollection}
@@ -64,7 +66,7 @@ const Footer = ({ customer, isPostProcess, onToggleProcess, sortField, onClearSo
           Download CSV
         </button>
         <button
-          className={`bg-green-600 text-white px-4 py-2 rounded ${!selectedCollection ? 'opacity-50 cursor-not-allowed' : 'hover:bg-green-700'}`}
+          className={`bg-green-600 text-white px-4 py-2 rounded ${!selectedCollection ? 'opacity-50 cursor-not-allowed' : 'hover:bg-green-700'} dark:bg-emerald-600 dark:hover:bg-emerald-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-blue-500 active:scale-95 transition-transform`}
           onClick={() => handleDownload('excel')}
           disabled={!selectedCollection}
           aria-disabled={!selectedCollection}
@@ -72,7 +74,7 @@ const Footer = ({ customer, isPostProcess, onToggleProcess, sortField, onClearSo
           Download Excel
         </button>
         <button
-          className={`bg-purple-600 text-white px-4 py-2 rounded ${!selectedCollection ? 'opacity-50 cursor-not-allowed' : 'hover:bg-purple-700'}`}
+          className={`bg-purple-600 text-white px-4 py-2 rounded ${!selectedCollection ? 'opacity-50 cursor-not-allowed' : 'hover:bg-purple-700'} dark:bg-violet-600 dark:hover:bg-violet-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-blue-500 active:scale-95 transition-transform`}
           onClick={handleDownloadSummary}
           disabled={!selectedCollection}
           aria-disabled={!selectedCollection}

@@ -83,23 +83,21 @@ export class Collection {
 
   // Get collection statistics
   async getStats() {
-    const preProcessCount = await query(
-      'SELECT COUNT(*) FROM pre_process_records WHERE collection_id = $1',
-      [this.id]
-    );
-    const postProcessCount = await query(
-      'SELECT COUNT(*) FROM post_process_records WHERE collection_id = $1',
-      [this.id]
-    );
-    const fileCount = await query(
-      'SELECT COUNT(*) FROM file_metadata WHERE collection_id = $1',
+    // Single query with sub-selects to return all three counts in one roundtrip
+    const q = await query(
+      `SELECT
+         (SELECT COUNT(*) FROM pre_process_records WHERE collection_id = $1) AS pre_count,
+         (SELECT COUNT(*) FROM post_process_records WHERE collection_id = $1) AS post_count,
+         (SELECT COUNT(*) FROM file_metadata WHERE collection_id = $1) AS file_count
+       `,
       [this.id]
     );
 
+    const row = q.rows[0] || { pre_count: 0, post_count: 0, file_count: 0 };
     return {
-      preProcessRecords: parseInt(preProcessCount.rows[0].count),
-      postProcessRecords: parseInt(postProcessCount.rows[0].count),
-      totalFiles: parseInt(fileCount.rows[0].count)
+      preProcessRecords: parseInt(row.pre_count, 10) || 0,
+      postProcessRecords: parseInt(row.post_count, 10) || 0,
+      totalFiles: parseInt(row.file_count, 10) || 0,
     };
   }
 

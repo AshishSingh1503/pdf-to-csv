@@ -3,6 +3,8 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { getUploadedFiles, getBatchStatus } from '../api/documentApi';
 import socket from '../services/websocket';
 import ProgressBar from './ProgressBar';
+import { FileCardSkeleton } from './SkeletonLoader'
+import EmptyState from './EmptyState'
 
 const UploadedFilesSidebar = ({ isOpen, onClose, selectedCollection, currentBatch = 0, totalBatches = 0 }) => {
   const [files, setFiles] = useState([]);
@@ -83,17 +85,117 @@ const UploadedFilesSidebar = ({ isOpen, onClose, selectedCollection, currentBatc
         // Batch-level events
         if (message.type === 'BATCH_PROCESSING_STARTED' && matchesCollection) {
           if (!batchId) return;
-          const batch = {
+          const existing = activeBatchesRef.current && activeBatchesRef.current[batchId];
+          const merged = {
             batchId: batchId,
             status: 'started',
+            queueStatus: 'processing',
             message: message.message || `Processing batch started (${message.fileCount || 0} files)`,
-            fileCount: message.fileCount || 0,
+            fileCount: message.fileCount || (existing ? existing.fileCount : 0),
             // prefer server-provided startedAt so elapsed time is accurate when opening mid-batch
-            startTime: message.startedAt ? new Date(message.startedAt) : new Date(),
+            startTime: message.startedAt ? new Date(message.startedAt) : (existing ? existing.startTime : new Date()),
+            lastUpdate: new Date(),
+            // drop queue-specific fields when transitioning to processing
+            queuePosition: undefined,
+            estimatedWaitTime: undefined,
+            totalQueued: undefined,
+            progress: existing ? existing.progress : undefined,
+          };
+          setActiveBatches(prev => ({ ...prev, [batchId]: { ...(prev[batchId] || {}), ...merged } }));
+          setBatchMessages(prev => [{ text: merged.message, type: 'info', ts: Date.now() }, ...prev].slice(0, 5));
+        }
+
+        // New: Batch queued (position/ETA)
+        if (message.type === 'BATCH_QUEUED' && matchesCollection) {
+          if (!batchId) return;
+          const position = message.position ?? message.queuePosition ?? undefined;
+          const estimated = message.estimatedWaitTime ?? message.estimated_wait_time ?? undefined;
+          const totalQueued = message.totalQueued ?? message.total_queued ?? undefined;
+          const enqueuedAt = message.timestamp ? new Date(message.timestamp) : new Date();
+          const batchObj = {
+            batchId,
+            status: 'queued',
+            queueStatus: 'queued',
+            message: message.message || `Queued for processing (${message.fileCount || 0} files)`,
+            fileCount: message.fileCount || 0,
+            queuePosition: typeof position === 'number' ? position : undefined,
+            estimatedWaitTime: typeof estimated === 'number' ? estimated : undefined,
+            totalQueued: typeof totalQueued === 'number' ? totalQueued : undefined,
+            enqueuedAt,
             lastUpdate: new Date(),
           };
-          setActiveBatches(prev => ({ ...prev, [batchId]: { ...(prev[batchId] || {}), ...batch } }));
-          setBatchMessages(prev => [{ text: batch.message, type: 'info', ts: Date.now() }, ...prev].slice(0, 5));
+          setActiveBatches(prev => ({ ...prev, [batchId]: { ...(prev[batchId] || {}), ...batchObj } }));
+          setBatchMessages(prev => [{ text: `📋 Batch queued (position ${batchObj.queuePosition ?? '?'})`, type: 'info', ts: Date.now() }, ...prev].slice(0, 5));
+        }
+
+        // New: Queue full error broadcast from server (not gated by collection)
+        if (message.type === 'QUEUE_FULL') {
+          try {
+            const qBatchId = message.batchId;
+            const qLen = message.queueLength;
+            const qMax = message.maxLength;
+            const serverMsg = message.message || 'Upload rejected: Server at capacity. Try again in a few minutes.';
+            const ts = Date.now();
+            // Push an error message visible regardless of selected collection
+            setBatchMessages(prev => [{ text: serverMsg, type: 'error', ts }, ...prev].slice(0, 5));
+            // Auto-dismiss after ~10s
+            const tid = setTimeout(() => {
+              setBatchMessages(prev => prev.filter(m => m.ts !== ts));
+            }, 10000);
+            timeoutsRef.current.push(tid);
+          } catch (err) {
+            console.warn('Failed to handle QUEUE_FULL message', err);
+          }
+        }
+
+        // New: Batch dequeued (removed from queue before processing)
+        if (message.type === 'BATCH_DEQUEUED' && matchesCollection) {
+          if (!batchId) return;
+          setActiveBatches(prev => {
+            const copy = { ...prev };
+            const existing = copy[batchId];
+            if (!existing) return prev;
+            // only act if the batch is still queued
+            if (existing.queueStatus && existing.queueStatus !== 'queued') return prev;
+            // mark transient dequeued state so UI can show it briefly
+            copy[batchId] = { ...existing, queueStatus: 'dequeued', lastUpdate: new Date() };
+            return copy;
+          });
+          setBatchMessages(prev => [{ text: `⚠️ Batch dequeued/cancelled (${batchId})`, type: 'info', ts: Date.now() }, ...prev].slice(0, 5));
+          // remove from activeBatches shortly after to avoid lingering UI
+          const removeTid = setTimeout(() => {
+            setActiveBatches(prev => {
+              const copy = { ...prev };
+              delete copy[batchId];
+              return copy;
+            });
+          }, 750);
+          timeoutsRef.current.push(removeTid);
+        }
+
+        // New: Queue position updated for existing queued batches
+        if (message.type === 'BATCH_QUEUE_POSITION_UPDATED' && matchesCollection) {
+          if (!batchId) return;
+          const position = message.position ?? undefined;
+          const estimated = message.estimatedWaitTime ?? message.estimated_wait_time ?? undefined;
+          const totalQueued = message.totalQueued ?? message.total_queued ?? undefined;
+          setActiveBatches(prev => {
+            const copy = { ...prev };
+            const existing = copy[batchId];
+            if (!existing) return prev; // ignore updates for unknown batches
+            if (existing.queueStatus && existing.queueStatus !== 'queued') return prev; // ignore if already processing/finished
+            const newPos = typeof position === 'number' ? position : existing.queuePosition;
+            const newEst = typeof estimated === 'number' ? estimated : existing.estimatedWaitTime;
+            const newTotal = typeof totalQueued === 'number' ? totalQueued : existing.totalQueued;
+            // only update if something changed to avoid re-renders
+            if (newPos === existing.queuePosition && newEst === existing.estimatedWaitTime && newTotal === existing.totalQueued) return prev;
+            copy[batchId] = { ...existing, queuePosition: newPos, estimatedWaitTime: newEst, totalQueued: newTotal, lastUpdate: new Date() };
+            // optionally add a subtle message if position improved noticeably
+            if (existing.queuePosition && typeof newPos === 'number' && newPos < existing.queuePosition) {
+              setBatchMessages(prevMsgs => [{ text: `📈 Queue position updated: ${newPos}`, type: 'info', ts: Date.now() }, ...prevMsgs].slice(0, 5));
+            }
+            return copy;
+          });
         }
 
         if (message.type === 'BATCH_PROCESSING_PROGRESS' && matchesCollection) {
@@ -106,6 +208,7 @@ const UploadedFilesSidebar = ({ isOpen, onClose, selectedCollection, currentBatc
                 copy[batchId] = {
                   batchId,
                   status: message.status || 'processing',
+                  queueStatus: 'processing',
                   message: message.message || 'Processing...',
                   fileCount: message.fileCount || 0,
                   progress: typeof progressVal === 'number' ? progressVal : (progressVal ? Number(progressVal) : undefined),
@@ -150,13 +253,18 @@ const UploadedFilesSidebar = ({ isOpen, onClose, selectedCollection, currentBatc
                   })();
                 }
             } else {
+              const existing = copy[batchId] || {};
+              // If the batch is not already in a terminal state, ensure queueStatus reflects processing
+              const terminal = existing.queueStatus === 'completed' || existing.queueStatus === 'failed';
               copy[batchId] = {
-                ...copy[batchId],
-                status: message.status || copy[batchId].status,
-                message: message.message || copy[batchId].message,
-                progress: typeof progressVal === 'number' ? progressVal : (progressVal ? Number(progressVal) : copy[batchId].progress),
+                ...existing,
+                status: message.status || existing.status,
+                // only set queueStatus to 'processing' if not terminal and not already set
+                queueStatus: terminal ? existing.queueStatus : (existing.queueStatus || 'processing'),
+                message: message.message || existing.message,
+                progress: typeof progressVal === 'number' ? progressVal : (progressVal ? Number(progressVal) : existing.progress),
                 // only set startTime if server gives one and we don't already have it
-                startTime: copy[batchId].startTime || (message.startedAt ? new Date(message.startedAt) : copy[batchId].startTime),
+                startTime: existing.startTime || (message.startedAt ? new Date(message.startedAt) : existing.startTime),
                 lastUpdate: new Date(),
               };
             }
@@ -171,13 +279,25 @@ const UploadedFilesSidebar = ({ isOpen, onClose, selectedCollection, currentBatc
 
         if (message.type === 'BATCH_PROCESSING_COMPLETED' && matchesCollection) {
           if (!batchId) return;
+          // mark completed briefly then remove for a smooth UI transition
+          const ts = Date.now();
           setActiveBatches(prev => {
             const copy = { ...prev };
-            delete copy[batchId];
+            if (copy[batchId]) {
+              copy[batchId] = { ...copy[batchId], queueStatus: 'completed', lastUpdate: new Date() };
+            }
             return copy;
           });
-          const ts = Date.now();
           setBatchMessages(prev => [{ text: `✅ Batch completed successfully (${message.fileCount || 0} files)`, type: 'success', ts }, ...prev].slice(0, 5));
+          // remove after short delay so user sees completion state
+          const removeTid = setTimeout(() => {
+            setActiveBatches(prev => {
+              const copy = { ...prev };
+              delete copy[batchId];
+              return copy;
+            });
+          }, 500);
+          timeoutsRef.current.push(removeTid);
           // refresh files list (debounced)
           scheduleFetchFiles();
           // auto remove success message after 5s — capture ts to remove specific one
@@ -189,12 +309,23 @@ const UploadedFilesSidebar = ({ isOpen, onClose, selectedCollection, currentBatc
 
         if (message.type === 'BATCH_PROCESSING_FAILED' && matchesCollection) {
           if (!batchId) return;
+          // show failed state before removing
           setActiveBatches(prev => {
             const copy = { ...prev };
-            delete copy[batchId];
+            if (copy[batchId]) {
+              copy[batchId] = { ...copy[batchId], queueStatus: 'failed', lastUpdate: new Date() };
+            }
             return copy;
           });
           setBatchMessages(prev => [{ text: `❌ Batch processing failed: ${message.error || 'unknown'}`, type: 'error', ts: Date.now() }, ...prev].slice(0, 5));
+          const removeFailTid = setTimeout(() => {
+            setActiveBatches(prev => {
+              const copy = { ...prev };
+              delete copy[batchId];
+              return copy;
+            });
+          }, 10000);
+          timeoutsRef.current.push(removeFailTid);
           scheduleFetchFiles();
         }
 
@@ -299,71 +430,178 @@ const UploadedFilesSidebar = ({ isOpen, onClose, selectedCollection, currentBatc
     return `${remSecs}s`;
   };
 
+  const formatWaitTime = (seconds) => {
+    if (seconds === null || seconds === undefined) return '';
+    const s = Number(seconds);
+    if (!isFinite(s)) return '';
+    if (s < 60) return '<1 min';
+    if (s < 3600) {
+      const m = Math.round(s / 60);
+      return `~${m} min`;
+    }
+    const hrs = Math.floor(s / 3600);
+    const mins = Math.round((s % 3600) / 60);
+    return `~${hrs}h ${mins}m`;
+  };
+
   const dismissMessage = (ts) => {
     setBatchMessages(prev => prev.filter(m => m.ts !== ts));
   };
 
   const getActiveBatchCount = () => Object.keys(activeBatches).length;
 
-  return (
-    <div className={`fixed top-0 right-0 h-full w-96 bg-white shadow-lg p-4 z-50 overflow-y-auto ${!isOpen ? 'hidden' : ''}`}>
-      <div className="flex justify-between items-center mb-4">
-        <h2 className="text-xl font-bold">Uploaded Files</h2>
-        <button onClick={onClose} className="text-gray-500 hover:text-gray-700">
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            className="h-6 w-6"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M6 18L18 6M6 6l12 12"
-            />
-          </svg>
-        </button>
-      </div>
+  useEffect(() => {
+    const handler = (e) => {
+      if (e.key === 'Escape' && isOpen) {
+        onClose()
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [isOpen, onClose])
 
-      {loading ? (
-        <p>Loading files...</p>
-      ) : (
+  // Derive grouped/sorted batches for display: processing first, then queued by position
+  const allBatches = Object.values(activeBatches || {});
+  const processingBatches = allBatches.filter(b => b && (b.queueStatus === 'processing' || b.queueStatus === 'started' || b.status === 'started' || b.status === 'processing' || b.queueStatus === 'completed'));
+  const dequeuedBatches = allBatches.filter(b => b && b.queueStatus === 'dequeued');
+  const queuedBatches = allBatches.filter(b => b && b.queueStatus === 'queued');
+  queuedBatches.sort((a, b) => {
+    const pa = (typeof a.queuePosition === 'number') ? a.queuePosition : Infinity;
+    const pb = (typeof b.queuePosition === 'number') ? b.queuePosition : Infinity;
+    return pa - pb;
+  });
+
+  return (
+    <>
+      {isOpen && <div className="fixed inset-0 bg-black/50 sm:hidden" onClick={onClose} />}
+      <div className={`fixed top-0 right-0 h-full w-full sm:w-96 max-w-full bg-white dark:bg-gray-800 dark:text-white shadow-lg p-4 z-50 overflow-y-auto ${!isOpen ? 'hidden' : ''}`}>
+        <div className="flex justify-between items-center mb-4">
+          <h2 className="text-xl font-bold dark:text-white">Uploaded Files</h2>
+          <button onClick={onClose} className="text-gray-500 hover:text-gray-700 dark:text-gray-300 dark:hover:text-white">
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              className="h-6 w-6"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M6 18L18 6M6 6l12 12"
+              />
+            </svg>
+          </button>
+        </div>
         <div className="space-y-4 pb-20"> {/* added bottom padding so floating button doesn’t overlap */}
 
           {/* Batch Status Section */}
           {(getActiveBatchCount() > 0 || (currentBatch > 0 && totalBatches > 0)) && (
-            <div className="mb-4 p-3 rounded-md bg-blue-50">
+            <div className="mb-4 p-3 rounded-md bg-blue-50 dark:bg-blue-900/20">
               <div className="flex items-center justify-between mb-2">
-                <h3 className="font-semibold text-sm">Processing batches ({getActiveBatchCount()})</h3>
+                <h3 className="font-semibold text-sm dark:text-slate-100">Processing ({processingBatches.length}) • Queued ({queuedBatches.length})</h3>
                 {(currentBatch > 0 && totalBatches > 0) && (
-                  <div className="text-xs text-blue-700">Batch {currentBatch} of {totalBatches} processing…</div>
+                  <div className="text-xs text-blue-700 dark:text-slate-300">Batch {currentBatch} of {totalBatches} processing…</div>
                 )}
               </div>
               <div className="space-y-2">
-                {Object.values(activeBatches).map(batch => (
-                  <div key={batch.batchId} className="flex flex-col p-2 bg-white rounded shadow-sm">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center space-x-3">
-                        <div className="w-3 h-3 rounded-full animate-pulse bg-blue-500" />
-                        <div>
-                          <div className="text-sm font-medium">{batch.message}</div>
-                          <div className="text-xs text-gray-500">{batch.fileCount} files {batch.startTime ? `• ${formatElapsedTime(batch.startTime)} ago` : ''}</div>
+                {/* Currently Processing first */}
+                {processingBatches.length > 0 && (
+                  <>
+                    <div className="mb-2 text-sm font-medium dark:text-slate-100">Currently Processing ({processingBatches.length})</div>
+                    {processingBatches.map(batch => {
+                      const isCompleted = batch.queueStatus === 'completed';
+                      return (
+                        <div key={batch.batchId} className={`flex flex-col p-2 ${isCompleted ? 'bg-green-50 dark:bg-green-900/10' : 'bg-white dark:bg-gray-800'} dark:border-gray-600 rounded shadow-sm`}>
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center space-x-3">
+                              <div className={`w-3 h-3 rounded-full ${isCompleted ? 'bg-green-500' : 'animate-pulse bg-blue-500'}`} />
+                              <div>
+                                <div className="text-sm font-medium dark:text-slate-100">{batch.message}</div>
+                                <div className="text-xs text-gray-500 dark:text-slate-300">{batch.fileCount} files {batch.startTime ? `• ${formatElapsedTime(batch.startTime)} ago` : ''}</div>
+                              </div>
+                            </div>
+                            <div>
+                              {isCompleted ? (
+                                <span className="px-2 py-1 text-xs font-semibold rounded-full text-green-800 bg-green-200 dark:text-green-200 dark:bg-green-900/20">Completed</span>
+                              ) : (
+                                <span className="px-2 py-1 text-xs font-semibold rounded-full text-blue-700 bg-blue-100 dark:text-blue-300 dark:bg-blue-900/30">Processing</span>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Progress indicator for processing batches (hide if just completed) */}
+                          {!isCompleted && typeof batch.progress === 'number' ? (() => {
+                            const now = Date.now();
+                            let eta = null;
+                            if (batch.startTime && typeof batch.progress === 'number' && batch.progress > 0) {
+                              const elapsedSecs = Math.max(1, Math.floor((now - new Date(batch.startTime).getTime()) / 1000));
+                              eta = Math.round(elapsedSecs * (100 / batch.progress - 1));
+                              if (!isFinite(eta) || eta < 0) eta = null;
+                            }
+                            return (
+                              <div className="mt-2">
+                                <ProgressBar progress={batch.progress} showPercentage={true} label={batch.message || 'Processing'} estimatedTimeRemaining={eta} />
+                              </div>
+                            )
+                          })() : null}
+                        </div>
+                      )
+                    })}
+                  </>
+                )}
+
+                {/* Dequeued transient group (short-lived) */}
+                {dequeuedBatches.length > 0 && (
+                  <>
+                    <div className="mt-2 mb-2 text-sm font-medium dark:text-slate-100">Dequeued ({dequeuedBatches.length})</div>
+                    {dequeuedBatches.map(batch => (
+                      <div key={batch.batchId} className="flex flex-col p-2 bg-yellow-50 dark:bg-yellow-900/10 rounded shadow-sm">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center space-x-3">
+                            <div className="text-amber-500">⚠️</div>
+                            <div>
+                              <div className="text-sm font-medium dark:text-slate-100">{batch.message || 'Batch dequeued'}</div>
+                              <div className="text-xs text-gray-500 dark:text-slate-300">{batch.fileCount} files • dequeued {formatElapsedTime(batch.lastUpdate)} ago</div>
+                            </div>
+                          </div>
+                          <div className="text-xs text-amber-700 dark:text-amber-300"><span className="px-2 py-1 text-xs font-semibold rounded-full text-amber-700 bg-amber-100 dark:text-amber-200 dark:bg-amber-900/20">Dequeued</span></div>
                         </div>
                       </div>
-                      <div className="text-xs text-gray-600">{batch.status}</div>
-                    </div>
+                    ))}
+                  </>
+                )}
 
-                    {/* Progress indicator: numeric percent or ProgressBar when available */}
-                    {typeof batch.progress === 'number' ? (
-                      <div className="mt-2 flex items-center space-x-2">
-                        <div className="flex-1"><ProgressBar progress={batch.progress} /></div>
-                        <div className="text-xs text-gray-600 w-12 text-right">{Math.round(batch.progress)}%</div>
+                {/* Queued batches next, sorted by queuePosition */}
+                {queuedBatches.length > 0 && (
+                  <>
+                    <div className="mt-3 mb-2 text-sm font-medium dark:text-slate-100">Queued ({queuedBatches.length})</div>
+                    {queuedBatches.map(batch => (
+                      <div key={batch.batchId} className="flex flex-col p-2 bg-yellow-50 dark:bg-yellow-900/10 dark:border-yellow-800/10 rounded shadow-sm">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center space-x-3">
+                            <div className="text-amber-500">⏳</div>
+                            <div>
+                              <div className="text-sm font-medium dark:text-slate-100">{batch.message}</div>
+                              <div className="text-xs text-gray-500 dark:text-slate-300">
+                                {typeof batch.queuePosition === 'number' ? (
+                                  <span className="font-semibold">Queued (position {batch.queuePosition}{batch.totalQueued ? ` of ${batch.totalQueued}` : ''})</span>
+                                ) : (
+                                  <span className="font-semibold">Queued (position ?)</span>
+                                )}
+                                {(batch.estimatedWaitTime !== null && batch.estimatedWaitTime !== undefined) ? ` • ${formatWaitTime(batch.estimatedWaitTime)} wait` : ''}
+                                {batch.enqueuedAt ? ` • queued ${formatElapsedTime(batch.enqueuedAt)} ago` : ''}
+                              </div>
+                            </div>
+                          </div>
+                          <div className="text-xs text-amber-700 dark:text-amber-300"><span className="px-2 py-1 text-xs font-semibold rounded-full text-amber-700 bg-amber-100 dark:text-amber-200 dark:bg-amber-900/20">Queued</span></div>
+                        </div>
+                        {/* Do not show progress bar or elapsed time for queued batches */}
                       </div>
-                    ) : null}
-                  </div>
-                ))}
+                    ))}
+                  </>
+                )}
               </div>
             </div>
           )}
@@ -372,27 +610,29 @@ const UploadedFilesSidebar = ({ isOpen, onClose, selectedCollection, currentBatc
           {batchMessages.length > 0 && (
             <div className="mb-4 p-2">
               {batchMessages.slice(0, 5).map((m) => (
-                <div key={m.ts} className={`flex items-start justify-between p-2 mb-2 rounded ${m.type === 'success' ? 'bg-green-50' : m.type === 'error' ? 'bg-red-50' : 'bg-blue-50'}`}>
+                <div key={m.ts} className={`flex items-start justify-between p-2 mb-2 rounded ${m.type === 'success' ? 'bg-green-50 dark:bg-green-900/20 dark:border-green-800 dark:text-green-300' : m.type === 'error' ? 'bg-red-50 dark:bg-red-900/20 dark:border-red-800 dark:text-red-400' : 'bg-blue-50 dark:bg-blue-900/20 dark:border-blue-800 dark:text-blue-200'}`}>
                   <div>
                     <div className="text-sm">{m.text}</div>
-                    <div className="text-xs text-gray-500">{new Date(m.ts).toLocaleTimeString()}</div>
+                    <div className="text-xs text-gray-500 dark:text-slate-300">{new Date(m.ts).toLocaleTimeString()}</div>
                   </div>
                   <div>
-                    <button onClick={() => dismissMessage(m.ts)} className="text-gray-400 hover:text-gray-600">x</button>
+                    <button onClick={() => dismissMessage(m.ts)} className="text-gray-400 hover:text-gray-600 dark:text-gray-400 dark:hover:text-gray-200">x</button>
                   </div>
                 </div>
               ))}
             </div>
           )}
 
+          {isOpen && loading && <FileCardSkeleton count={5} />}
+
           {files.map((file) => {
             const safeStatus = (file.processing_status || '').trim();
             return (
-            <div key={file.id} className="border rounded-lg p-4 bg-gray-50">
+            <div key={file.id} className="border rounded-lg p-4 bg-gray-50 dark:bg-gray-800 dark:border-gray-600 text-gray-900 dark:text-white">
               <div className="flex justify-between items-center">
                 <div>
                   <p className="font-semibold">{file.original_filename}</p>
-                  <p className="text-sm text-gray-500">
+                  <p className="text-sm text-gray-500 dark:text-gray-400">
                     {new Date(file.created_at).toLocaleString()} &nbsp; {(file.file_size / 1024).toFixed(2)} KB
                   </p>
                 </div>
@@ -408,10 +648,10 @@ const UploadedFilesSidebar = ({ isOpen, onClose, selectedCollection, currentBatc
                   <span
                     className={`px-2 py-1 text-xs font-semibold rounded-full ${
                       safeStatus === 'completed'
-                        ? 'text-green-800 bg-green-200'
+                        ? 'text-green-800 bg-green-200 dark:text-green-200 dark:bg-green-900/20'
                         : safeStatus === 'processing'
-                        ? 'text-yellow-800 bg-yellow-200'
-                        : 'text-red-800 bg-red-200'
+                        ? 'text-yellow-800 bg-yellow-200 dark:text-yellow-300 dark:bg-yellow-900/40'
+                        : 'text-red-800 bg-red-200 dark:text-red-200 dark:bg-red-900/20'
                     }`}
                   >
                     {safeStatus}
@@ -425,17 +665,23 @@ const UploadedFilesSidebar = ({ isOpen, onClose, selectedCollection, currentBatc
               )}
             </div>
           )})}
-        </div>
-      )}
 
+          {(!loading && (!files || files.length === 0)) && (
+            <EmptyState icon="📄" title="No files uploaded yet" description="Upload PDF files to see them here" />
+          )}
+        </div>
+      </div>
       {/* ✅ Floating Close Button — fixed properly */}
-      <button
-        onClick={onClose}
-        className="fixed bottom-6 right-6 bg-gray-800 text-white px-4 py-2 rounded-lg shadow-lg hover:bg-gray-900 transition-all z-50"
-      >
-        Close
-      </button>
-    </div>
+      {isOpen && (
+        <button
+          onClick={onClose}
+          className="fixed bottom-6 right-6 bg-gray-800 text-white px-4 py-2 rounded-lg shadow-lg hover:bg-gray-900 dark:bg-slate-700 dark:hover:bg-slate-600 transition-all z-50 min-w-[44px] min-h-[44px] flex items-center justify-center"
+          aria-label="Close uploaded files sidebar"
+        >
+          Close
+        </button>
+      )}
+    </>
   );
 };
 

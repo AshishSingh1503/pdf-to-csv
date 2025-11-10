@@ -1,13 +1,17 @@
 // server/src/controllers/customerController.js
 import { Customer } from '../models/Customer.js';
+import logger from '../utils/logger.js';
+import cache from '../services/cache.js';
+
+const { KEYS } = cache;
 
 // Get all customers
 export const getAllCustomers = async (req, res) => {
   try {
-    const customers = await Customer.findAll();
+  const customers = await cache.getOrSet(KEYS.CUSTOMERS_ALL, async () => Customer.findAll());
     res.json({ success: true, data: customers });
   } catch (error) {
-    console.error('Error fetching customers:', error);
+    logger.error('Error fetching customers', { error: error?.message, stack: error?.stack });
     res.status(500).json({ success: false, error: 'Failed to fetch customers' });
   }
 };
@@ -16,7 +20,7 @@ export const getAllCustomers = async (req, res) => {
 export const getCustomerById = async (req, res) => {
   try {
     const { id } = req.params;
-    const customer = await Customer.findById(id);
+  const customer = await cache.getOrSet(KEYS.CUSTOMER_BY_ID(id), async () => Customer.findById(id));
     
     if (!customer) {
       return res.status(404).json({ success: false, error: 'Customer not found' });
@@ -24,7 +28,7 @@ export const getCustomerById = async (req, res) => {
     
     res.json({ success: true, data: customer });
   } catch (error) {
-    console.error('Error fetching customer:', error);
+    logger.error('Error fetching customer', { error: error?.message, stack: error?.stack });
     res.status(500).json({ success: false, error: 'Failed to fetch customer' });
   }
 };
@@ -43,10 +47,11 @@ export const createCustomer = async (req, res) => {
       email: email?.trim(),
       phone: phone?.trim()
     });
-    
+    // invalidate customer list cache
+  cache.del(KEYS.CUSTOMERS_ALL);
     res.status(201).json({ success: true, data: customer });
   } catch (error) {
-    console.error('Error creating customer:', error);
+    logger.error('Error creating customer', { error: error?.message, stack: error?.stack });
     res.status(500).json({ success: false, error: 'Failed to create customer' });
   }
 };
@@ -76,9 +81,11 @@ export const updateCustomer = async (req, res) => {
       return res.status(500).json({ success: false, error: 'Failed to update customer' });
     }
     
+  cache.del(KEYS.CUSTOMERS_ALL);
+  cache.del(KEYS.CUSTOMER_BY_ID(id));
     res.json({ success: true, data: updatedCustomer });
   } catch (error) {
-    console.error('Error updating customer:', error);
+    logger.error('Error updating customer', { error: error?.message, stack: error?.stack });
     res.status(500).json({ success: false, error: 'Failed to update customer' });
   }
 };
@@ -97,10 +104,20 @@ export const deleteCustomer = async (req, res) => {
     if (!deleted) {
       return res.status(500).json({ success: false, error: 'Failed to delete customer' });
     }
-    
+    cache.del(KEYS.CUSTOMERS_ALL);
+    cache.del(KEYS.CUSTOMER_BY_ID(id));
+    // Invalidate collections cache for this customer and global collections list
+    try {
+      cache.del(KEYS.COLLECTIONS_ALL(id));
+      cache.del(KEYS.COLLECTIONS_ALL_GLOBAL);
+    } catch (e) {
+      // fallback: use pattern invalidation
+      cache.invalidatePattern(`collections:all:${id}`);
+      cache.invalidatePattern(KEYS.COLLECTIONS_ALL_GLOBAL);
+    }
     res.json({ success: true, message: 'Customer deleted successfully' });
   } catch (error) {
-    console.error('Error deleting customer:', error);
+    logger.error('Error deleting customer', { error: error?.message, stack: error?.stack });
     res.status(500).json({ success: false, error: 'Failed to delete customer' });
   }
 };

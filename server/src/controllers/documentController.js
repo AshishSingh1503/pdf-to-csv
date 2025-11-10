@@ -16,6 +16,152 @@ import fs from "fs";
 import xlsx from "xlsx";
 import { saveFiles, createZip } from '../utils/fileHelpers.js';
 import { broadcast } from '../services/websocket.js';
+import logger from '../utils/logger.js';
+import batchQueueManager from '../services/batchQueueManager.js';
+import { config } from '../config/index.js';
+
+// Listen to queue events to broadcast queue state to clients
+batchQueueManager.on('batch:enqueued', ({ batchId, collectionId, fileCount, position, estimatedWaitTime, totalQueued, queueStatus }) => {
+  try {
+    // Include queue metadata to help clients show position and ETA
+    const payload = { type: 'BATCH_QUEUED', batchId, collectionId, fileCount, position, estimatedWaitTime, totalQueued, queueStatus, timestamp: new Date().toISOString() };
+    broadcast(payload);
+    logger.info('Broadcasted BATCH_QUEUED', { batchId, position, estimatedWaitTime, totalQueued });
+  } catch (e) {
+    logger.warn('Failed to broadcast BATCH_QUEUED', e && e.message);
+  }
+});
+
+batchQueueManager.on('batch:dequeued', async ({ batchId, collectionId, fileCount, startedAt, totalQueued, activeCount, availableSlots }) => {
+  try {
+    // when the queue manager starts a batch, emit both a BATCH_DEQUEUED and the official started event
+    // Attempt to fetch file metadata for richer client payloads (best-effort)
+    let files = [];
+    try {
+      files = await FileMetadata.findByBatchId(batchId);
+    } catch (e) {
+      logger.warn('Unable to fetch FileMetadata for dequeued batch', e && e.message);
+      files = [];
+    }
+
+    const fc = typeof fileCount === 'number' ? fileCount : (Array.isArray(files) ? files.length : undefined);
+
+    // Use the startedAt provided by the queue manager so timestamps are consistent
+    const started = startedAt || new Date().toISOString();
+
+    const payload = { batchId, collectionId, fileCount: fc, files, startedAt: started, totalQueued, activeCount, availableSlots };
+
+    try {
+      // Broadcast a specific dequeued event first
+      broadcast({ type: 'BATCH_DEQUEUED', ...payload, timestamp: new Date().toISOString() });
+      logger.info('Broadcasted BATCH_DEQUEUED', { batchId, totalQueued, activeCount, availableSlots });
+    } catch (e) {
+      logger.warn('Failed to broadcast BATCH_DEQUEUED', e && e.message);
+    }
+
+    try {
+      // Backwards-compatible started event
+      broadcast({ type: 'BATCH_PROCESSING_STARTED', ...payload, timestamp: new Date().toISOString() });
+      logger.info('Broadcasted BATCH_PROCESSING_STARTED from queue', { batchId, totalQueued, activeCount, availableSlots });
+    } catch (e) {
+      logger.warn('Failed to broadcast BATCH_PROCESSING_STARTED from queue', e && e.message);
+    }
+  } catch (e) {
+    logger.warn('Failed in batch:dequeued handler', e && e.message);
+  }
+});
+
+batchQueueManager.on('batch:completed', ({ batchId, collectionId, totalQueued, activeCount, availableSlots }) => {
+  try {
+    const payload = { type: 'BATCH_QUEUE_COMPLETED', batchId, collectionId, totalQueued, activeCount, availableSlots, timestamp: new Date().toISOString() };
+    broadcast(payload);
+    logger.info('Broadcasted BATCH_QUEUE_COMPLETED', { batchId, collectionId, totalQueued, activeCount, availableSlots });
+  } catch (e) {
+    logger.warn('Failed to broadcast BATCH_QUEUE_COMPLETED', e && e.message);
+  }
+});
+
+// Queue full: broadcast to clients so uploaders get immediate feedback
+batchQueueManager.on('queue:full', ({ batchId, queueLength, maxLength, collectionId }) => {
+  try {
+    const payload = { type: 'QUEUE_FULL', batchId, collectionId, queueLength, maxLength, message: 'Server is at capacity. Please try again in a few minutes.', timestamp: new Date().toISOString() };
+    broadcast(payload);
+    logger.warn('Broadcasted QUEUE_FULL', { batchId, collectionId, queueLength, maxLength });
+  } catch (e) {
+    logger.warn('Failed to broadcast QUEUE_FULL', e && e.message);
+  }
+});
+
+// Batch timeout: notify clients that a batch has been failed due to timeout
+batchQueueManager.on('batch:timeout', async ({ batchId, timeoutMs }) => {
+  try {
+    // Mark files for this batch as failed to avoid leaving them stuck in 'processing'
+    try {
+      const files = await FileMetadata.findByBatchId(batchId);
+      if (Array.isArray(files) && files.length > 0) {
+        const updated = [];
+        for (const meta of files) {
+          try {
+            const status = (meta.processing_status || '').toLowerCase();
+            if (status === 'processing') {
+              const latest = await FileMetadata.findById(meta.id);
+              if (latest) {
+                const changed = await latest.updateStatus('failed');
+                updated.push(changed || latest);
+              }
+            } else {
+              updated.push(meta);
+            }
+          } catch (e) {
+            logger.warn('Failed to mark file as failed after batch timeout', { batchId, fileId: meta && meta.id, err: e && e.message });
+          }
+        }
+
+        // Broadcast per-file FILES_PROCESSED events so UI updates deterministically
+        try {
+          const fileBroadcasts = (updated || []).map(async (metadata) => {
+            if (!metadata) return null;
+            const camel = normalizeMetadata(metadata);
+            const cid = metadata.collection_id || metadata.collectionId || null;
+            broadcast({ type: 'FILES_PROCESSED', batchId, collectionId: cid, fileMetadata: camel, file_metadata: metadata });
+          });
+          await Promise.all(fileBroadcasts);
+        } catch (e) {
+          logger.warn('Failed to broadcast per-file FILES_PROCESSED after timeout', e && e.message);
+        }
+      }
+    } catch (e) {
+      logger.warn('Error while marking files failed on batch timeout', { batchId, err: e && e.message });
+    }
+
+    // Keep existing batch-level failure broadcast
+    try {
+      const payload = { type: 'BATCH_PROCESSING_FAILED', batchId, error: 'Batch processing timeout exceeded', timeoutMs, timestamp: new Date().toISOString() };
+      broadcast(payload);
+      logger.error('Broadcasted batch timeout failure', { batchId, timeoutMs });
+    } catch (e) {
+      logger.warn('Failed to broadcast batch timeout', e && e.message);
+    }
+  } catch (e) {
+    logger.warn('Failed in batch:timeout handler', e && e.message);
+  }
+});
+
+// Listen for position update events from the queue manager and forward to clients
+batchQueueManager.on('batch:position-updated', ({ batchId, collectionId, position, estimatedWaitTime, totalQueued, reason }) => {
+  try {
+    const payload = { type: 'BATCH_QUEUE_POSITION_UPDATED', batchId, collectionId, position, estimatedWaitTime, totalQueued, reason, timestamp: new Date().toISOString() };
+    broadcast(payload);
+    logger.debug('Broadcasted BATCH_QUEUE_POSITION_UPDATED', { batchId, position, estimatedWaitTime, reason });
+  } catch (e) {
+    logger.warn('Failed to broadcast BATCH_QUEUE_POSITION_UPDATED', e && e.message);
+  }
+});
+
+// Log document controller startup and queue configuration
+try {
+  logger.info('Document controller initialized with queue configuration', { maxConcurrentBatches: config.maxConcurrentBatches, enableQueueLogging: config.enableQueueLogging });
+} catch (e) { /* ignore logging errors */ }
 
 // Helper: normalize metadata to camelCase for client consumption while keeping snake_case fallback
 const normalizeMetadata = (meta) => {
@@ -75,6 +221,18 @@ export const processDocuments = async (req, res) => {
     // include a startedAt timestamp so clients opening mid-batch can align elapsed time
     const startedAt = new Date().toISOString();
 
+    // Check whether the queue can accept this new batch before creating DB records
+    try {
+      if (!batchQueueManager.canAcceptNewBatch()) {
+        logger.warn('Upload rejected: queue at capacity before creating file metadata', { batchId, collectionId: collectionIdNum });
+        // Notify uploader immediately
+        try { broadcast({ type: 'QUEUE_FULL', batchId, collectionId: collectionIdNum, queueLength: batchQueueManager.queue.length, maxLength: batchQueueManager.MAX_QUEUE_LENGTH, message: 'Server is at capacity. Please try again in a few minutes.' }) } catch (e) {}
+        return res.status(503).json({ success: false, error: 'Server is at capacity. Please try again in a few minutes.', queueFull: true });
+      }
+    } catch (e) {
+      logger.warn('Failed to check queue capacity; proceeding with enqueue', e && e.message);
+    }
+
     const fileMetadataPromises = fileArray.map(file => {
       return FileMetadata.create({
         collection_id: collectionIdNum,
@@ -86,27 +244,89 @@ export const processDocuments = async (req, res) => {
     });
     const fileMetadatas = await Promise.all(fileMetadataPromises);
 
-    res.json({
+    // Enqueue the batch for processing via BatchQueueManager
+    // Use the shared processor wrapper that adapts our processor to the queue manager
+    const processorFunction = processBatchWrapper;
+
+    let position;
+    try {
+      position = batchQueueManager.enqueue({ batchId, collectionId: collectionIdNum, fileArray, fileMetadatas, fileCount: fileArray.length, processorFunction });
+      // Recompute effective position because enqueue may return a transient value
+      // Ensure clients receive accurate position (0 = processing started)
+      try {
+        const recalculated = batchQueueManager.getQueuePosition(batchId);
+        if (typeof recalculated === 'number') {
+          position = recalculated;
+        }
+      } catch (e) {
+        logger.warn('Unable to recalculate queue position after enqueue', e && e.message);
+      }
+
+      logger.info(`Enqueued batch ${batchId} collection ${collectionIdNum} files=${fileArray.length} position=${position}`);
+
+      // Fetch overall queue status and include in response so clients get metadata (length, slots, averages)
+      let queueStatus = null
+      try {
+        queueStatus = batchQueueManager.getQueueStatus()
+      } catch (e) {
+        logger.warn('Unable to fetch queue status after enqueue', e && e.message)
+        queueStatus = null
+      }
+
+      if (position === -1) {
+        // validation failure reported by queue manager
+        logger.error(`Batch enqueue validation failed for batch ${batchId}`);
+        // mark all created file metadata as failed to avoid leaving them stuck in 'processing'
+        try {
+          await Promise.all(fileMetadatas.map(async (m) => {
+            try {
+              const latest = await FileMetadata.findById(m.id);
+              if (latest) await latest.updateStatus('failed');
+            } catch (e) { /* best-effort */ }
+          }));
+        } catch (e) { /* ignore */ }
+        // If the rejection was likely due to queue capacity, return 503 so clients can retry later
+        try {
+          const likelyQueueFull = (batchQueueManager.queue.length >= batchQueueManager.MAX_QUEUE_LENGTH && batchQueueManager.activeSlots.size >= batchQueueManager.maxConcurrentBatches);
+          if (likelyQueueFull) {
+            return res.status(503).json({ success: false, error: 'Server is at capacity. Please try again in a few minutes.', queueFull: true });
+          }
+        } catch (e) {
+          // ignore and fallthrough to generic 500
+        }
+        return res.status(500).json({ success: false, error: 'Failed to enqueue batch for processing' });
+      }
+    } catch (e) {
+      logger.error('Exception while enqueueing batch:', e && e.message);
+      try {
+        await Promise.all(fileMetadatas.map(async (m) => {
+          try {
+            const latest = await FileMetadata.findById(m.id);
+            if (latest) await latest.updateStatus('failed');
+          } catch (e) { /* best-effort */ }
+        }));
+      } catch (e) { /* ignore */ }
+      return res.status(500).json({ success: false, error: 'Failed to enqueue batch for processing' });
+    }
+
+    // Respond to client with metadata, batchId and queue position (0 = processing, >0 = queued)
+    const responsePayload = {
       success: true,
-      files: fileMetadatas,
-      message: `Successfully uploaded ${fileArray.length} file(s). Processing in background.`,
-    });
-
-    // Emit batch start event (include startedAt to help clients show elapsed time accurately)
-    broadcast({
-      type: 'BATCH_PROCESSING_STARTED',
       batchId,
-      collectionId: collectionIdNum,
-      fileCount: fileArray.length,
       files: fileMetadatas,
-      startedAt
-    });
-
-    // FIXED: Process all files in the background in PARALLEL
-    processPDFFilesParallel(fileArray, collectionIdNum, fileMetadatas, batchId, startedAt);
+      position,
+      message: position === 0 ? `Successfully uploaded ${fileArray.length} file(s). Processing started.` : `Successfully uploaded ${fileArray.length} file(s). Queued at position ${position}.`,
+    }
+    if (queueStatus) {
+      responsePayload.queueLength = queueStatus.queueLength
+      responsePayload.availableSlots = queueStatus.availableSlots
+      responsePayload.averageWaitTimeSeconds = queueStatus.averageWaitTimeSeconds
+      responsePayload.estimatedWaitTime = (typeof position === 'number') ? batchQueueManager.estimateWaitTime(position) : null
+    }
+    res.json(responsePayload)
 
   } catch (err) {
-    console.error("🔥 Error in processDocuments:", err);
+    logger.error("Error in processDocuments:", err);
     res.status(500).json({ error: err.message });
   }
 };
@@ -117,14 +337,14 @@ export const processDocuments = async (req, res) => {
 const processPDFFilesParallel = async (fileArray, collectionIdNum, fileMetadatas, batchId = null, startedAt = null) => {
   let progressInterval = null;
   try {
-    console.log(`📊 Starting parallel processing for ${fileArray.length} files...`);
+  logger.info(`Starting parallel processing for ${fileArray.length} files...`);
 
     // Emit initial batch progress and start heartbeat
     try {
       // initial progress: 0%
       broadcast({ type: 'BATCH_PROCESSING_PROGRESS', batchId, collectionId: collectionIdNum, status: 'started', message: 'Processing PDFs with Document AI...', progress: 0, startedAt });
     } catch (e) {
-      console.warn('⚠️  Unable to broadcast initial batch progress:', e && e.message);
+      logger.warn('Unable to broadcast initial batch progress:', e && e.message);
     }
 
     // heartbeat: include numeric progress if we can compute it from DB via a single aggregate query
@@ -152,7 +372,7 @@ const processPDFFilesParallel = async (fileArray, collectionIdNum, fileMetadatas
 
         broadcast({ type: 'BATCH_PROCESSING_PROGRESS', batchId, collectionId: collectionIdNum, status: 'processing', message: 'Still processing...', timestamp: new Date().toISOString(), startedAt, progress });
       } catch (err) {
-        console.warn('⚠️  Failed to broadcast heartbeat:', err && err.message);
+        logger.warn('Failed to broadcast heartbeat:', err && err.message);
       } finally {
         heartbeatInFlight = false;
         // schedule next heartbeat only if not stopped
@@ -204,23 +424,36 @@ const processPDFFilesParallel = async (fileArray, collectionIdNum, fileMetadatas
       processing_timestamp: processingTimestamp
     }));
 
-    console.log(`📦 Prepared: ${allPreProcessRecords.length} pre + ${allPostProcessRecords.length} post records`);
+  logger.info(`Prepared: ${allPreProcessRecords.length} pre + ${allPostProcessRecords.length} post records`);
+    // ⭐ KEY OPTIMIZATION: Insert in chunks to avoid hitting parameter limits and excessive memory
+    logger.info(`Inserting into database with chunking...`);
+    const CHUNK_SIZE = parseInt(process.env.DB_INSERT_CHUNK_SIZE, 10) || 1000;
 
-    // ⭐ KEY OPTIMIZATION: Insert ALL at once (uses only 2 connections!)
-    console.log(`💾 Inserting into database...`);
-    // Guard bulkCreate calls to avoid ORM/DB edge cases with empty arrays
-    const insertedPre = (allPreProcessRecords && allPreProcessRecords.length > 0) ? await PreProcessRecord.bulkCreate(allPreProcessRecords) : [];
-    const insertedPost = (allPostProcessRecords && allPostProcessRecords.length > 0) ? await PostProcessRecord.bulkCreate(allPostProcessRecords) : [];
-    const insertedRemoved = (allRemovedRecordsForDB && allRemovedRecordsForDB.length > 0) ? await RemovedRecord.bulkCreate(allRemovedRecordsForDB) : [];
+    const chunkAndInsert = async (Model, records, label) => {
+      if (!records || records.length === 0) return 0;
+      let totalInserted = 0;
+      for (let i = 0; i < records.length; i += CHUNK_SIZE) {
+        const chunk = records.slice(i, i + CHUNK_SIZE);
+        const inserted = await Model.bulkCreate(chunk);
+        const insertedCount = Array.isArray(inserted) ? inserted.length : (inserted.rowCount || 0);
+        totalInserted += insertedCount;
+        logger.info(`Inserted chunk ${Math.floor(i / CHUNK_SIZE) + 1} for ${label}: ${insertedCount} rows`);
+      }
+      return totalInserted;
+    };
 
-    console.log(`✅ Inserted: ${insertedPre.length} pre, ${insertedPost.length} post, ${insertedRemoved.length} removed records`);
+    const insertedPreCount = await chunkAndInsert(PreProcessRecord, allPreProcessRecords, 'pre-process');
+    const insertedPostCount = await chunkAndInsert(PostProcessRecord, allPostProcessRecords, 'post-process');
+    const insertedRemovedCount = await chunkAndInsert(RemovedRecord, allRemovedRecordsForDB, 'removed');
+
+    logger.info(`Inserted total: ${insertedPreCount} pre, ${insertedPostCount} post, ${insertedRemovedCount} removed records`);
 
     // Broadcast DB insert milestone
     try {
       // milestone: DB insert ~33%
       broadcast({ type: 'BATCH_PROCESSING_PROGRESS', batchId, collectionId: collectionIdNum, status: 'database_insert_complete', message: 'Records inserted into database', progress: 33, startedAt });
     } catch (e) {
-      console.warn('⚠️  Unable to broadcast database insert milestone:', e && e.message);
+      logger.warn('Unable to broadcast database insert milestone:', e && e.message);
     }
 
     // NOTE: Defer marking files as 'completed' until after each successful upload
@@ -248,11 +481,11 @@ const processPDFFilesParallel = async (fileArray, collectionIdNum, fileMetadatas
               return uploadedFiles;
             } catch (statusErr) {
               // If we fail to mark as completed, consider this file failed so it doesn't stay 'processing'
-              console.warn('⚠️  Failed to update file status to completed for', fileMetadatas[idx].id, statusErr && statusErr.message);
+              logger.warn('Failed to update file status to completed for', fileMetadatas[idx].id, statusErr && statusErr.message);
               try {
                 await fileMetadatas[idx].updateStatus('failed');
               } catch (failedErr) {
-                console.error('❌ Also failed to mark file as failed for', fileMetadatas[idx].id, failedErr && failedErr.message);
+                logger.error('Also failed to mark file as failed for', fileMetadatas[idx].id, failedErr && failedErr.message);
               }
               return null;
             }
@@ -262,19 +495,19 @@ const processPDFFilesParallel = async (fileArray, collectionIdNum, fileMetadatas
           }
         }
       } catch (err) {
-        console.error(`❌ Error uploading file ${file.name}:`, err);
+        logger.error(`Error uploading file ${file.name}:`, err);
         return null;
       }
     });
 
     const uploadResults = await Promise.all(uploadPromises);
     const succeededCount = uploadResults.filter(r => r).length;
-    console.log(`✅ Uploaded ${succeededCount} files to cloud`);
+  logger.info(`Uploaded ${succeededCount} files to cloud`);
 
     // If any upload failed, mark files as failed and emit batch failure
     const anyUploadFailed = uploadResults.some(r => !r);
     if (anyUploadFailed) {
-      console.error('❌ One or more uploads failed for this batch. Marking failed files only.');
+  logger.error('One or more uploads failed for this batch. Marking failed files only.');
 
       // Determine which indices failed
       const failedIndices = uploadResults.map((r, i) => (!r ? i : -1)).filter(i => i >= 0);
@@ -290,7 +523,7 @@ const processPDFFilesParallel = async (fileArray, collectionIdNum, fileMetadatas
           // mark as failed
           return await latest.updateStatus('failed');
         } catch (err) {
-          console.error('❌ Error marking metadata as failed for index', idx, err);
+      logger.error('Error marking metadata as failed for index', idx, err);
           return null;
         }
       });
@@ -309,7 +542,7 @@ const processPDFFilesParallel = async (fileArray, collectionIdNum, fileMetadatas
           try {
             currentMetadatas[i] = await cm.updateStatus('failed');
           } catch (e) {
-            console.warn('⚠️ Failed to flip processing->failed for', cm.id, e && e.message);
+            logger.warn('Failed to flip processing->failed for', cm.id, e && e.message);
           }
         }
       }
@@ -318,7 +551,7 @@ const processPDFFilesParallel = async (fileArray, collectionIdNum, fileMetadatas
       try {
         broadcast({ type: 'BATCH_PROCESSING_FAILED', batchId, collectionId: collectionIdNum, fileCount: fileMetadatas.length, error: 'One or more uploads failed', partial: true, files: currentMetadatas, startedAt });
       } catch (e) {
-        console.warn('⚠️  Unable to broadcast cloud upload failure milestone:', e && e.message);
+        logger.warn('Unable to broadcast cloud upload failure milestone:', e && e.message);
       }
 
       // Emit FILES_PROCESSED for each file with its current metadata so UI can update individual statuses
@@ -332,7 +565,7 @@ const processPDFFilesParallel = async (fileArray, collectionIdNum, fileMetadatas
         });
         await Promise.all(failureBroadcasts);
       } catch (e) {
-        console.warn('⚠️  Unable to broadcast individual file statuses after partial failure:', e && e.message);
+        logger.warn('Unable to broadcast individual file statuses after partial failure:', e && e.message);
       }
 
       return;
@@ -343,7 +576,7 @@ const processPDFFilesParallel = async (fileArray, collectionIdNum, fileMetadatas
       // milestone: cloud upload ~66%
       broadcast({ type: 'BATCH_PROCESSING_PROGRESS', batchId, collectionId: collectionIdNum, status: 'cloud_upload_complete', message: 'Files uploaded to cloud storage', progress: 66, startedAt });
     } catch (e) {
-      console.warn('⚠️  Unable to broadcast cloud upload milestone:', e && e.message);
+      logger.warn('Unable to broadcast cloud upload milestone:', e && e.message);
     }
 
     // STEP 4: Broadcast completion
@@ -353,7 +586,7 @@ const processPDFFilesParallel = async (fileArray, collectionIdNum, fileMetadatas
       const refreshedMetadatas = await Promise.all(fileMetadatas.map(m => FileMetadata.findById(m.id)));
       broadcast({ type: 'BATCH_PROCESSING_COMPLETED', batchId, collectionId: collectionIdNum, fileCount: fileMetadatas.length, files: refreshedMetadatas, message: 'Batch processing completed successfully', progress: 100, startedAt });
     } catch (e) {
-      console.warn('⚠️  Unable to broadcast batch completion:', e && e.message);
+      logger.warn('Unable to broadcast batch completion:', e && e.message);
     }
 
     // Reload each metadata from DB before broadcasting to avoid stale processing_status
@@ -371,18 +604,18 @@ const processPDFFilesParallel = async (fileArray, collectionIdNum, fileMetadatas
           const camel = normalizeMetadata(metadata);
           broadcast({ type: 'FILES_PROCESSED', batchId, collectionId: metadata.collection_id, fileMetadata: camel, file_metadata: metadata });
         } catch (err) {
-          console.warn('⚠️  Unable to broadcast FILES_PROCESSED for metadata', metadata && metadata.id, err && err.message);
+          logger.warn('Unable to broadcast FILES_PROCESSED for metadata', metadata && metadata.id, err && err.message);
         }
       }
     });
 
     await Promise.all(broadcastPromises);
-    console.log(`✅ Broadcast complete events`);
+    logger.info('Broadcast complete events');
 
-  console.log(`🎉 All ${fileArray.length} files processed successfully!`);
+    logger.info(`All ${fileArray.length} files processed successfully!`);
 
   } catch (error) {
-    console.error("🔥 Error in processPDFFilesParallel:", error);
+    logger.error("Error in processPDFFilesParallel:", error);
 
     // Only mark files that are still in 'processing' as 'failed'. Do not overwrite already-completed files.
     const updatedMetadatas = await Promise.all(fileMetadatas.map(async (metadata) => {
@@ -394,14 +627,14 @@ const processPDFFilesParallel = async (fileArray, collectionIdNum, fileMetadatas
           try {
             return await latest.updateStatus('failed');
           } catch (uErr) {
-            console.error('❌ Error updating metadata to failed for', latest.id, uErr && uErr.message);
+            logger.error('Error updating metadata to failed for', latest.id, uErr && uErr.message);
             return latest;
           }
         }
         // keep completed/failed as-is
         return latest;
       } catch (err) {
-        console.error(`❌ Error fetching latest metadata for id ${metadata.id}:`, err && err.message);
+        logger.error(`Error fetching latest metadata for id ${metadata.id}:`, err && err.message);
         return null;
       }
     }));
@@ -413,8 +646,8 @@ const processPDFFilesParallel = async (fileArray, collectionIdNum, fileMetadatas
     // Broadcast batch failure using updated metadata. If some files succeeded, mark partial:true
     try {
       broadcast({ type: 'BATCH_PROCESSING_FAILED', batchId, collectionId: collectionIdNum, fileCount: fileMetadatas.length, error: error?.message, files: updatedMetadatas, startedAt, partial: anyCompleted });
-    } catch (e) {
-      console.warn('⚠️  Unable to broadcast batch failure:', e && e.message);
+      } catch (e) {
+      logger.warn('Unable to broadcast batch failure:', e && e.message);
     }
 
     // Broadcast individual FILES_PROCESSED events with normalized payloads
@@ -427,7 +660,7 @@ const processPDFFilesParallel = async (fileArray, collectionIdNum, fileMetadatas
       });
       await Promise.all(broadcastPromises);
     } catch (e) {
-      console.warn('⚠️  Unable to broadcast individual failure events:', e && e.message);
+      logger.warn('Unable to broadcast individual failure events:', e && e.message);
     }
 
     throw error;
@@ -438,7 +671,7 @@ const processPDFFilesParallel = async (fileArray, collectionIdNum, fileMetadatas
       try { stopped = true; } catch (e) {}
       if (progressInterval) clearTimeout(progressInterval);
     } catch (e) {
-      console.warn('⚠️  Error clearing progressInterval:', e && e.message);
+      logger.warn('Error clearing progressInterval:', e && e.message);
     }
   }
 };
@@ -504,7 +737,7 @@ export const updateUploadProgress = async (req, res) => {
   broadcast({ type: 'UPLOAD_PROGRESS', fileId, progress, collectionId: fileMetadata.collection_id, batchId: fileMetadata.batch_id || null });
     res.json({ success: true });
   } catch (err) {
-    console.error('🔥 Error in updateUploadProgress:', err);
+    logger.error('Error in updateUploadProgress:', err);
     res.status(500).json({ error: err.message });
   }
 };
@@ -565,11 +798,20 @@ export const reprocessFile = async (req, res) => {
       processing_timestamp: processingTimestamp,
     }));
 
-    await Promise.all([
-      PreProcessRecord.bulkCreate(preProcessRecords),
-      PostProcessRecord.bulkCreate(postProcessRecords),
-      RemovedRecord.bulkCreate(removedRecords),
-    ]);
+    // Use chunked inserts for reprocess as well
+    const CHUNK_SIZE_REPROCESS = parseInt(process.env.DB_INSERT_CHUNK_SIZE, 10) || 1000;
+    const chunkAndInsertLocal = async (Model, records, label) => {
+      if (!records || records.length === 0) return 0;
+      for (let i = 0; i < records.length; i += CHUNK_SIZE_REPROCESS) {
+        const chunk = records.slice(i, i + CHUNK_SIZE_REPROCESS);
+        await Model.bulkCreate(chunk);
+        logger.info(`Reprocess inserted chunk ${Math.floor(i / CHUNK_SIZE_REPROCESS) + 1} for ${label}: ${chunk.length} rows`);
+      }
+    };
+
+    await chunkAndInsertLocal(PreProcessRecord, preProcessRecords, 'pre-process');
+    await chunkAndInsertLocal(PostProcessRecord, postProcessRecords, 'post-process');
+    await chunkAndInsertLocal(RemovedRecord, removedRecords, 'removed');
 
     await fileMetadata.updateStatus('completed');
 
@@ -577,7 +819,7 @@ export const reprocessFile = async (req, res) => {
 
     res.json({ success: true, message: `File ${fileId} has been reprocessed.` });
   } catch (err) {
-    console.error('🔥 Error in reprocessFile:', err);
+    logger.error('Error in reprocessFile:', err);
     res.status(500).json({ error: err.message });
   }
 };
@@ -589,10 +831,10 @@ export const downloadFile = (req, res) => {
     }
     const filePath = path.join(process.cwd(), "output", session, file);
     res.download(filePath, (err) => {
-        if (err) {
-            console.error("🔥 Error downloading file:", err);
-            res.status(500).json({ error: "Could not download the file." });
-        }
+      if (err) {
+        logger.error("Error downloading file:", err);
+        res.status(500).json({ error: "Could not download the file." });
+      }
     });
 };
 
@@ -619,7 +861,7 @@ const downloadCollectionFile = async (req, res, fileType) => {
       return res.status(404).json({ error: "No records found" });
     }
 
-    console.log(`📊 Exporting ${fileType.toUpperCase()}: ${records.length} records`);
+  logger.info(`Exporting ${fileType.toUpperCase()}: ${records.length} records`);
 
     const tempDir = path.join(process.cwd(), "temp", `collection-${collectionId}`);
     if (!fs.existsSync(tempDir)) {
@@ -673,7 +915,7 @@ const downloadCollectionFile = async (req, res, fileType) => {
 
       // Write file
       xlsx.writeFile(workbook, filePath);
-      console.log(`✅ Created ${fileName}: ${fs.statSync(filePath).size} bytes`);
+  logger.info(`Created ${fileName}: ${fs.statSync(filePath).size} bytes`);
 
     } else {
       // CSV export
@@ -682,27 +924,27 @@ const downloadCollectionFile = async (req, res, fileType) => {
         header: Object.keys(records[0] || {}).map(key => ({ id: key, title: key }))
       });
       await csvWriter.writeRecords(records);
-      console.log(`✅ Created ${fileName}: ${fs.statSync(filePath).size} bytes`);
+  logger.info(`Created ${fileName}: ${fs.statSync(filePath).size} bytes`);
     }
 
     // Download file
-    res.download(filePath, `${collection.name}-${fileName}`, (err) => {
+      res.download(filePath, `${collection.name}-${fileName}`, (err) => {
       if (err) {
-        console.error("🔥 Error downloading file:", err.message);
+        logger.error("Error downloading file:", err.message);
       } else {
-        console.log(`✅ Downloaded ${fileName}`);
+        logger.info(`Downloaded ${fileName}`);
       }
       
       // Cleanup
       try {
         fs.unlinkSync(filePath);
       } catch (cleanupErr) {
-        console.warn(`⚠️  Cleanup error: ${cleanupErr.message}`);
+        logger.warn(`Cleanup error: ${cleanupErr.message}`);
       }
     });
 
-  } catch (err) {
-    console.error(`🔥 Error in downloadCollectionFile:`, err);
+    } catch (err) {
+    logger.error(`Error in downloadCollectionFile:`, err);
     res.status(500).json({ error: err.message });
   }
 };
@@ -790,21 +1032,21 @@ export const downloadCollectionSummary = async (req, res) => {
 
     res.download(filePath, `${collection.name}-summary.txt`, (err) => {
       if (err) {
-        console.error("🔥 Error downloading summary file:", err.message);
+        logger.error("Error downloading summary file:", err.message);
       } else {
-        console.log(`✅ Downloaded ${fileName}`);
+        logger.info(`Downloaded ${fileName}`);
       }
 
       // Cleanup the uniquely named temp file
       try {
         fs.unlinkSync(filePath);
       } catch (cleanupErr) {
-        console.warn(`⚠️  Cleanup error: ${cleanupErr.message}`);
+        logger.warn(`Cleanup error: ${cleanupErr.message}`);
       }
     });
 
   } catch (err) {
-    console.error(`🔥 Error in downloadCollectionSummary:`, err);
+    logger.error(`Error in downloadCollectionSummary:`, err);
     res.status(500).json({ error: err.message });
   }
 };
@@ -816,7 +1058,7 @@ export const getUploadedFiles = async (req, res) => {
     const files = await FileMetadata.findAll(collectionId);
     res.json({ success: true, data: files });
   } catch (err) {
-    console.error('🔥 Error in getUploadedFiles:', err);
+    logger.error('Error in getUploadedFiles:', err);
     res.status(500).json({ error: err.message });
   }
 };
@@ -846,7 +1088,34 @@ export const getBatchStatus = async (req, res) => {
 
     return res.json({ success: true, batchId, counts, files, startedAt });
   } catch (err) {
-    console.error('🔥 Error in getBatchStatus:', err);
+    logger.error('Error in getBatchStatus:', err);
     res.status(500).json({ error: err.message });
+  }
+};
+
+// Adapter wrapper so the BatchQueueManager can call the processor with a single object argument.
+// This wrapper preserves logging, error propagation, and ensures the returned promise reflects
+// the underlying processing result so the queue manager can release slots appropriately.
+const processBatchWrapper = async ({ fileArray, collectionId, fileMetadatas, batchId, startedAt }) => {
+  try {
+    logger.info(`processBatchWrapper: starting batch=${batchId} collection=${collectionId} fileCount=${Array.isArray(fileArray) ? fileArray.length : 0}`);
+    const result = await processPDFFilesParallel(fileArray, collectionId, fileMetadatas, batchId, startedAt);
+    logger.info(`processBatchWrapper: completed batch=${batchId}`);
+    return result;
+  } catch (err) {
+    logger.error(`processBatchWrapper: error for batch=${batchId}:`, err && err.message);
+    // re-throw so the queue manager can catch and release slots
+    throw err;
+  }
+};
+
+// Monitoring endpoint: return queue status from BatchQueueManager
+export const getQueueStatus = async (req, res) => {
+  try {
+    const status = batchQueueManager.getQueueStatus();
+    return res.json({ success: true, status });
+  } catch (err) {
+    logger.error('Error in getQueueStatus:', err && err.message);
+    return res.status(500).json({ success: false, error: err.message });
   }
 };

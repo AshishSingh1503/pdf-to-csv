@@ -5,6 +5,34 @@
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>client</title>
+    <!-- Eager theme script: read persisted theme or system preference and apply `dark` class before React mounts to avoid FOUC -->
+    <script>
+      (function() {
+        try {
+          var theme = null;
+          try { theme = localStorage.getItem('theme'); } catch (e) { theme = null; }
+          var useDark = false;
+          if (!theme || theme === 'system') {
+            if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+              useDark = true;
+            }
+          } else if (theme === 'dark') {
+            useDark = true;
+          }
+          if (useDark) document.documentElement.classList.add('dark'); else document.documentElement.classList.remove('dark');
+
+          // keep it in sync for system preference changes when in 'system' mode
+          if ((!theme || theme === 'system') && window.matchMedia) {
+            var mql = window.matchMedia('(prefers-color-scheme: dark)');
+            var handler = function(e) {
+              if (e.matches) document.documentElement.classList.add('dark'); else document.documentElement.classList.remove('dark');
+            };
+            if (mql.addEventListener) mql.addEventListener('change', handler);
+            else if (mql.addListener) mql.addListener(handler);
+          }
+        } catch (e) { /* silent */ }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

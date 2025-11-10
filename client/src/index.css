@@ -1,1 +1,74 @@
 @import "tailwindcss";
+
+/* Enable class-based dark mode custom variant (Tailwind v4 custom-variant) */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Small defaults to smooth transitions when toggling theme */
+html, body, #root {
+	transition: background-color 200ms ease, color 200ms ease;
+}
+
+/* Improve focus visibility for keyboard navigation (scoped to interactive elements to avoid double ring conflicts) */
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  outline: 2px solid theme('colors.blue.500');
+  outline-offset: 2px;
+}
+/* Improve focus visibility for keyboard navigation (scoped to interactive elements to avoid double ring conflicts) */
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  outline: 2px solid theme('colors.blue.500');
+  outline-offset: 2px;
+}
+
+/* Smooth scrolling for better UX */
+html {
+	scroll-behavior: smooth;
+}
+
+/* Custom scrollbar for better aesthetics */
+::-webkit-scrollbar {
+	width: 8px;
+	height: 8px;
+}
+
+::-webkit-scrollbar-track {
+	background: theme('colors.gray.100');
+}
+
+.dark ::-webkit-scrollbar-track {
+	background: theme('colors.slate.800');
+}
+
+::-webkit-scrollbar-thumb {
+	background: theme('colors.gray.400');
+	border-radius: 4px;
+}
+
+.dark ::-webkit-scrollbar-thumb {
+	background: theme('colors.slate.600');
+}
+
+::-webkit-scrollbar-thumb:hover {
+	background: theme('colors.gray.500');
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+	background: theme('colors.slate.500');
+}
+
+@media (prefers-reduced-motion: reduce) {
+	*,
+	*::before,
+	*::after {
+		animation-duration: 0.01ms !important;
+		animation-iteration-count: 1 !important;
+		transition-duration: 0.01ms !important;
+	}
+}

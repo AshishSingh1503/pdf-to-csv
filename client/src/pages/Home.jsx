@@ -11,6 +11,9 @@ import SearchBar from "../components/SearchBar";
 import DownloadButtons from "../components/DownloadButtons";
 import UploadedFilesSidebar from "../components/UploadedFilesSidebar";
 import ProgressBar from "../components/ProgressBar";
+import { useToast } from "../contexts/ToastContext";
+import { TableSkeleton } from "../components/SkeletonLoader";
+import EmptyState from "../components/EmptyState";
 
 const Home = () => {
   
@@ -34,13 +37,15 @@ const Home = () => {
   const [uploadProgress, setUploadProgress] = useState(0);
   const [currentBatch, setCurrentBatch] = useState(0);
   const [totalBatches, setTotalBatches] = useState(0);
+  const [uploadStartTime, setUploadStartTime] = useState(null);
+  const { showSuccess, showError } = useToast();
 
   // ✅ Batch Upload Logic
   const handleUpload = async (newFiles, collectionId) => {
     if (!newFiles.length) return;
 
     if (!collectionId) {
-      alert("Please select a collection before uploading files");
+      showError("Please select a collection before uploading files");
       return;
     }
 
@@ -56,7 +61,8 @@ const Home = () => {
       fileChunks.push(newFiles.slice(i, i + BATCH_SIZE));
     }
 
-    setTotalBatches(fileChunks.length);
+  setTotalBatches(fileChunks.length);
+  setUploadStartTime(Date.now());
   // Auto-open the uploaded files sidebar so users can see progress immediately
   setIsSidebarOpen(true);
     setLoading(true);
@@ -64,29 +70,79 @@ const Home = () => {
     setCurrentBatch(0);
 
     try {
+      let abortedDueToCapacity = false;
       for (let i = 0; i < fileChunks.length; i++) {
         const batch = fileChunks[i];
         setCurrentBatch(i + 1);
         console.log(`Uploading batch ${i + 1}/${fileChunks.length}...`);
 
-        await uploadAndProcess(batch, collectionId, (progressEvent) => {
-          const percentCompleted = Math.round(
-            (progressEvent.loaded * 100) / progressEvent.total
-          );
-          setUploadProgress(percentCompleted);
-        });
+        try {
+          const data = await uploadAndProcess(batch, collectionId, (progressEvent) => {
+            setUploadProgress(prev => {
+              try {
+                if (progressEvent && progressEvent.total && progressEvent.total > 0) {
+                  const pct = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+                  return Math.max(0, Math.min(100, pct));
+                }
+                // Some XHR implementations may provide a fractional loaded (0-1)
+                if (progressEvent && typeof progressEvent.loaded === 'number' && progressEvent.loaded >= 0 && progressEvent.loaded <= 1) {
+                  return Math.max(0, Math.min(100, Math.round(progressEvent.loaded * 100)));
+                }
+              } catch (err) {
+                // fall through to return previous
+              }
+              return prev || 0;
+            });
+          });
 
-        // Optional pause between batches
-        await new Promise((resolve) => setTimeout(resolve, 1000));
+          // If server accepted but returned queued position, surface a light notification so users know ETA
+          try {
+            if (data && data.position !== undefined && data.position > 0) {
+              const eta = data.estimatedWaitTime ? ` Estimated wait: ${data.estimatedWaitTime}s.` : '';
+              showSuccess(`Batch queued at position ${data.position}.${eta}`);
+            }
+          } catch (e) {
+            // ignore toast failures
+          }
+
+          // Optional pause between batches
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+        } catch (err) {
+          // Axios-like error handling to detect HTTP 503 + queueFull responses
+          const resp = err && err.response;
+          if (resp && resp.status === 503) {
+            const d = resp.data || {};
+            const serverMsg = d.error || d.message || 'Server is at capacity. Please try again in a few minutes.';
+            let extra = '';
+            try {
+              if (d.queueFull) {
+                if (d.estimatedWaitTime) extra = ` Estimated wait: ${d.estimatedWaitTime}s.`;
+                else if (typeof d.position === 'number') extra = ` Position: ${d.position}.`;
+                else if (typeof d.queueLength === 'number') extra = ` Queue length: ${d.queueLength}.`;
+              }
+            } catch (e) {}
+
+            showError(`Server busy: ${serverMsg}${extra}`);
+            // stop further batches and let the upload UI reset in finally
+            abortedDueToCapacity = true;
+            break;
+          }
+
+          // For other errors, rethrow so outer catch handles generic failures
+          throw err;
+        }
       }
 
       await fetchData();
-      alert(
-        `✅ Successfully uploaded ${newFiles.length} file(s) in ${fileChunks.length} batch(es).`
-      );
+      if (!abortedDueToCapacity) {
+        showSuccess(`✅ Successfully uploaded ${newFiles.length} file(s) in ${fileChunks.length} batch(es).`);
+      } else {
+        // If aborted due to capacity, refresh UI and notify user they can retry later
+        showError('Upload paused: server at capacity. Some files may not have been queued. Please try again in a few minutes.');
+      }
     } catch (error) {
       console.error("Upload error:", error);
-      alert("❌ Failed to process some files. Please try again.");
+      showError("❌ Failed to process some files. Please try again.");
     } finally {
       setLoading(false);
       setUploadProgress(0);
@@ -102,7 +158,7 @@ const Home = () => {
     const selectedFiles = [...e.target.files];
     if (selectedFiles.length > 0) {
       if (!selectedCollection) {
-        alert("Please select a collection before uploading files");
+        showError("Please select a collection before uploading files");
         return;
       }
       handleUpload(selectedFiles, selectedCollection.id);
@@ -165,6 +221,19 @@ const Home = () => {
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  // keyboard shortcut: Ctrl/Cmd+U to open file upload
+  useEffect(() => {
+    const handler = (e) => {
+      const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0
+      if ((isMac && e.metaKey && e.key.toLowerCase() === 'u') || (!isMac && e.ctrlKey && e.key.toLowerCase() === 'u')) {
+        e.preventDefault()
+        fileInputRef.current?.click()
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [])
 
   const handleSearch = (term) => {
     setSearchTerm(term);
@@ -265,16 +334,25 @@ const Home = () => {
 
   const paginatedData = getCurrentData();
 
+  const [customersSidebarOpen, setCustomersSidebarOpen] = useState(true)
+
   return (
-    <div className="flex h-screen bg-gray-50">
+    <div className="flex flex-col lg:flex-row h-screen bg-slate-50 dark:bg-slate-900">
       {showCollectionsSidebar && (
-        <CustomersSidebar
-          selectedCustomer={selectedCustomer}
-          onCustomerSelect={handleCustomerSelect}
-          selectedCollection={selectedCollection}
-          onCollectionSelect={handleCollectionSelect}
-          onRefresh={fetchData}
-        />
+        <>
+          {customersSidebarOpen && (
+            <div className="fixed inset-0 bg-black/50 lg:hidden" onClick={() => setCustomersSidebarOpen(false)} aria-hidden="true" />
+          )}
+          <CustomersSidebar
+            isOpen={customersSidebarOpen}
+            onClose={() => setCustomersSidebarOpen(false)}
+            selectedCustomer={selectedCustomer}
+            onCustomerSelect={handleCustomerSelect}
+            selectedCollection={selectedCollection}
+            onCollectionSelect={handleCollectionSelect}
+            onRefresh={fetchData}
+          />
+        </>
       )}
 
       <div className="flex-1 flex flex-col">
@@ -283,6 +361,7 @@ const Home = () => {
           onUploadClick={handleHeaderUploadClick}
           selectedCollection={selectedCollection}
           onToggleSidebar={() => setIsSidebarOpen(!isSidebarOpen)}
+          onToggleCustomersSidebar={() => setCustomersSidebarOpen(prev => !prev)}
         />
 
         <main className="flex-1 overflow-y-auto">
@@ -303,12 +382,12 @@ const Home = () => {
             />
 
             {selectedCollection && (
-              <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
-                <h3 className="font-medium text-blue-900">
+              <div className="mb-4 p-3 bg-blue-50 dark:bg-slate-800 border border-blue-200 dark:border-slate-700 rounded-lg">
+                <h3 className="font-medium text-blue-900 dark:text-slate-100">
                   {selectedCollection.name}
                 </h3>
                 {selectedCollection.description && (
-                  <p className="text-sm text-blue-700">
+                  <p className="text-sm text-blue-700 dark:text-slate-300">
                     {selectedCollection.description}
                   </p>
                 )}
@@ -319,16 +398,22 @@ const Home = () => {
 
             {loading && (
               <div className="mt-4">
-                <p className="text-gray-500">
+                <p className="text-gray-500 dark:text-slate-300">
                   Uploading and processing files...{" "}
-                  {currentBatch > 0 &&
-                    ` (Batch ${currentBatch} of ${totalBatches})`}
+                  {currentBatch > 0 && ` (Batch ${currentBatch} of ${totalBatches})`}
                 </p>
-                <ProgressBar progress={uploadProgress} />
+                <ProgressBar
+                  progress={uploadProgress}
+                  showPercentage={true}
+                  label={currentBatch > 0 ? `Batch ${currentBatch} of ${totalBatches}` : 'Uploading'}
+                  estimatedTimeRemaining={uploadStartTime && currentBatch > 0 ? Math.round(((Date.now() - uploadStartTime) / currentBatch) * (totalBatches - currentBatch) / 1000) : null}
+                />
               </div>
             )}
 
-            {data ? (
+            {loading && !data ? (
+              <TableSkeleton rows={10} columns={7} />
+            ) : data ? (
               <ClientTable
                 data={paginatedData}
                 isPostProcess={isPostProcess}
@@ -337,11 +422,13 @@ const Home = () => {
                 onSort={handleSort}
               />
             ) : (
-              <p className="mt-4 text-gray-500">
-                {selectedCollection
-                  ? `No data found in "${selectedCollection.name}" collection.`
-                  : "Select a collection or upload PDFs to see the results."}
-              </p>
+              !loading && !data ? (
+                <EmptyState
+                  icon="📊"
+                  title="No data available"
+                  description={selectedCollection ? `No data found in "${selectedCollection.name}" collection.` : 'Select a collection or upload PDFs to see the results.'}
+                />
+              ) : null
             )}
           </div>
         </main>

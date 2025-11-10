@@ -2,6 +2,7 @@
 import { PreProcessRecord } from '../models/PreProcessRecord.js';
 import { PostProcessRecord } from '../models/PostProcessRecord.js';
 import { Collection } from '../models/Collection.js';
+import logger from '../utils/logger.js';
 
 // Get pre-process data
 export const getPreProcessData = async (req, res) => {
@@ -44,7 +45,7 @@ export const getPreProcessData = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Error fetching pre-process data:', error);
+    logger.error('Error fetching pre-process data', { error: error?.message, stack: error?.stack });
     res.status(500).json({ success: false, error: 'Failed to fetch pre-process data' });
   }
 };
@@ -92,7 +93,7 @@ export const getPostProcessData = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Error fetching post-process data:', error);
+    logger.error('Error fetching post-process data', { error: error?.message, stack: error?.stack });
     res.status(500).json({ success: false, error: 'Failed to fetch post-process data' });
   }
 };
@@ -155,7 +156,7 @@ export const searchData = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Error searching data:', error);
+    logger.error('Error searching data', { error: error?.message, stack: error?.stack });
     res.status(500).json({ success: false, error: 'Failed to search data' });
   }
 };
@@ -173,7 +174,7 @@ export const getCollectionStats = async (req, res) => {
     const stats = await collection.getStats();
     res.json({ success: true, data: stats });
   } catch (error) {
-    console.error('Error fetching collection stats:', error);
+    logger.error('Error fetching collection stats', { error: error?.message, stack: error?.stack });
     res.status(500).json({ success: false, error: 'Failed to fetch collection statistics' });
   }
 };

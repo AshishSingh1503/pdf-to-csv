@@ -2,6 +2,7 @@
 import { DocumentProcessorServiceClient } from "@google-cloud/documentai";
 import Parser from "name-parser";
 import { config } from "../config/index.js";
+import logger from '../utils/logger.js';
 import fs from "fs";
 import path from "path";
 import pLimit from "p-limit";
@@ -14,8 +15,8 @@ import { promises as fsPromises } from "fs";
 
 
 // --- CONFIGURATION & CONSTANTS ---
-const SAFE_MAX_WORKERS = 12; // Reduced from 20 to avoid GCP rate limiting
-const WORKER_THREAD_POOL_SIZE = Math.min(os.cpus().length, 4); // 4-8 threads max
+const SAFE_MAX_WORKERS = 12; // Upper bound to avoid GCP rate limiting and resource exhaustion
+const BASE_WORKER_THREAD_POOL = Number(config.workerThreadPoolSize) || Math.max(2, Math.min(os.cpus().length, 4)); // configurable base pool size
 const MAX_PDF_SIZE_BYTES = 50 * 1024 * 1024; // 50MB warning threshold
 const PDF_SIZE_WARN_BYTES = 30 * 1024 * 1024; // 30MB soft limit
 const BATCH_SIZE_RECORDS = 500;
@@ -35,9 +36,9 @@ const MAX_CONCURRENT_REQUESTS = 15; // Hard cap for GCP quota safety
 try {
   const clientConfig = process.env.NODE_ENV === 'production' ? {} : { keyFilename: config.credentials };
   client = new DocumentProcessorServiceClient(clientConfig);
-  console.log('✅ Document AI client initialized successfully');
+  logger.info('Document AI client initialized successfully');
 } catch (error) {
-  console.error("🔥 Failed to initialize Document AI client:", error);
+  logger.error("Failed to initialize Document AI client:", error);
   throw new Error("Failed to initialize Document AI client. Please check your Google Cloud credentials.");
 }
 
@@ -80,7 +81,7 @@ class WorkerThreadPool {
         worker: null, // Lazily initialized
       });
     }
-    console.log(`🧵 Worker thread pool initialized with ${this.poolSize} slots`);
+    logger.info(`Worker thread pool initialized with ${this.poolSize} slots`);
   }
 
 
@@ -144,7 +145,7 @@ class WorkerThreadPool {
       clearTimeout(timeout);
       workerSlot.isAvailable = true;
       this.activeCount--;
-      console.error('❌ Worker error:', error);
+      logger.error('Worker error:', error);
       reject(error);
       this.processQueue();
     });
@@ -169,11 +170,11 @@ class WorkerThreadPool {
         try {
           await workerSlot.worker.terminate();
         } catch (err) {
-          console.warn('⚠️  Error terminating worker:', err.message);
+          logger.warn('Error terminating worker:', err.message);
         }
       }
     }
-    console.log('🧵 Worker thread pool terminated');
+    logger.info('Worker thread pool terminated');
   }
 }
 
@@ -191,7 +192,7 @@ const parseFullName = (fullName) => {
 
     // Validate that we got meaningful results
     if (!firstName && !lastName) {
-      console.warn(`⚠️  name-parser couldn't parse: "${fullName}"`);
+      logger.warn(`name-parser couldn't parse: "${fullName}"`);
       // Fallback to manual split if library fails
       const parts = fullName.trim().split(/\s+/);
       return {
@@ -211,7 +212,7 @@ const parseFullName = (fullName) => {
 
     return { first: firstName, last: lastName };
   } catch (error) {
-    console.error(`❌ Name parser error for "${fullName}":`, error.message);
+    logger.error(`Name parser error for "${fullName}":`, error.message);
     // Emergency fallback to manual parsing
     const parts = fullName.trim().split(/\s+/);
     return {
@@ -324,12 +325,10 @@ const simpleGrouping = (entities) => {
 
 
   if (withCoords.length / entities.length < 0.5) {
-    console.warn(`[Diagnostic] Insufficient coordinate data. Using pure startIndex grouping.`);
+    logger.debug('Insufficient coordinate data. Using pure startIndex grouping.');
     return pureStartIndexGrouping(entities);
   }
-
-
-  console.log(`[Diagnostic] Using hybrid coordinate/startIndex grouping.`);
+  logger.debug('Using hybrid coordinate/startIndex grouping.');
 
 
   // 1. Form rows from entities that have coordinates
@@ -538,7 +537,7 @@ const retryWithBackoff = async (fn, maxRetries = RETRY_ATTEMPTS, initialDelay = 
 
       if (isRateLimit && attempt < maxRetries - 1) {
         const delay = initialDelay * Math.pow(2, attempt);
-        console.warn(`⏱️  Rate limited. Retrying after ${delay}ms (attempt ${attempt + 1}/${maxRetries})`);
+        logger.warn(`Rate limited. Retrying after ${delay}ms (attempt ${attempt + 1}/${maxRetries})`);
         await new Promise(resolve => setTimeout(resolve, delay));
       } else if (!isRateLimit) {
         throw error;
@@ -554,7 +553,7 @@ const retryWithBackoff = async (fn, maxRetries = RETRY_ATTEMPTS, initialDelay = 
 // --- OPTIMIZATION 2: Batch Database Inserts ---
 export const batchInsertRecords = async (records, dbClient, batchSize = BATCH_SIZE_RECORDS) => {
   if (!records || records.length === 0) {
-    console.log('⚠️  No records to insert');
+    logger.debug('No records to insert');
     return { insertedCount: 0, batches: 0 };
   }
 
@@ -574,13 +573,12 @@ export const batchInsertRecords = async (records, dbClient, batchSize = BATCH_SI
         insertedCount += result.insertedCount;
       }
 
-      console.log(`📦 Batch ${batchCount}: Inserted ${batch.length} records`);
+      logger.debug(`Batch ${batchCount}: Inserted ${batch.length} records`);
     }
-
-    console.log(`✅ Total inserted: ${insertedCount} records in ${batchCount} batches`);
+    logger.info(`Total inserted: ${insertedCount} records in ${batchCount} batches`);
     return { insertedCount, batches: batchCount };
   } catch (error) {
-    console.error('❌ Error in batch insert:', error.message);
+    logger.error('Error in batch insert:', error.message);
     throw error;
   }
 };
@@ -592,7 +590,7 @@ const readFileBuffered = async (tempPath) => {
   try {
     return await fsPromises.readFile(tempPath);
   } catch (error) {
-    console.error(`❌ Failed to read file ${tempPath}:`, error.message);
+    logger.error(`Failed to read file ${tempPath}:`, error.message);
     throw error;
   }
 };
@@ -605,7 +603,7 @@ const cleanupTempFile = async (tempPath) => {
   } catch (error) {
     // PITFALL FIX: Non-fatal error handling
     if (error.code !== 'ENOENT') {
-      console.warn(`⚠️  Failed to cleanup temp file ${tempPath}:`, error.message);
+      logger.warn(`Failed to cleanup temp file ${tempPath}:`, error.message);
     }
   }
 };
@@ -721,7 +719,7 @@ const batchValidateRecords = async (records, batchSize = 100) => {
     const allRejected = validatedBatches.flatMap(b => (b && b.rejectedRecords) ? b.rejectedRecords : []);
     return { validRecords: allValid, rejectedRecords: allRejected };
   } catch (error) {
-    console.warn(`⚠️  Worker thread validation failed, falling back to main thread:`, error.message);
+    logger.warn('Worker thread validation failed, falling back to main thread:', error.message);
     return cleanAndValidate(prepped);
   }
 };
@@ -831,7 +829,7 @@ const checkPdfSize = async (filePath, fileName) => {
     }
 
     if (stats.size > PDF_SIZE_WARN_BYTES) {
-      console.warn(`⚠️  Large PDF detected: ${fileName} (${fileSizeMB.toFixed(1)}MB)`);
+      logger.warn(`Large PDF detected: ${fileName} (${fileSizeMB.toFixed(1)}MB)`);
     }
 
     return true;
@@ -845,7 +843,7 @@ const checkPdfSize = async (filePath, fileName) => {
 // --- Graceful Shutdown Handler ---
 const setupGracefulShutdown = async () => {
   const cleanup = async () => {
-    console.log('\n🛑 Shutting down gracefully...');
+    logger.info('Shutting down gracefully...');
     if (workerThreadPool) {
       await workerThreadPool.terminate();
     }
@@ -857,7 +855,7 @@ const setupGracefulShutdown = async () => {
 
   // Handle uncaught exceptions in promises
   process.on('unhandledRejection', (reason, promise) => {
-    console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
+    logger.error('Unhandled Rejection at:', { promise, reason });
   });
 };
 
@@ -877,30 +875,26 @@ const setupGracefulShutdown = async () => {
  */
 export const processPDFs = async (pdfFiles, batchSize = 10, maxWorkers = 4) => {
   // Initialize worker thread pool if needed
-  if (!workerThreadPool && pdfFiles.length >= 10) {
-    workerThreadPool = new WorkerThreadPool(WORKER_THREAD_POOL_SIZE);
+  // Initialize worker thread pool if needed (use a safe base pool size)
+  const initialPoolSize = Math.min(BASE_WORKER_THREAD_POOL, SAFE_MAX_WORKERS);
+  if (!workerThreadPool && pdfFiles.length >= 2) {
+    workerThreadPool = new WorkerThreadPool(initialPoolSize);
     setupGracefulShutdown();
   }
 
-  // ⭐ NEW LOGIC: Scale workers based on file count
-  let scaledWorkers = SAFE_MAX_WORKERS;
+  // Determine concurrency based on file count with safe upper bound
+  const determineScaledWorkers = (count) => {
+    if (count <= 1) return 2;
+    if (count === 2) return Math.min(5, SAFE_MAX_WORKERS);
+    if (count <= 10) return Math.min(8, SAFE_MAX_WORKERS);
+    if (count <= 30) return Math.min(Math.ceil(count / 3), SAFE_MAX_WORKERS);
+    if (count <= 100) return Math.min(12, SAFE_MAX_WORKERS);
+    return SAFE_MAX_WORKERS;
+  };
 
-  if (pdfFiles.length === 1) {
-    scaledWorkers = 2;
-  } else if (pdfFiles.length === 2) {
-    scaledWorkers = 5;
-  } else if (pdfFiles.length <= 10) {
-    scaledWorkers = 5;
-  } else if (pdfFiles.length <= 30) {
-    scaledWorkers = pdfFiles.length;  // ⭐ Send ALL to Google immediately!
-  } else if (pdfFiles.length <= 100) {
-    scaledWorkers = 50;  // ⭐ For 100 files, use 50 workers
-  } else {
-    scaledWorkers = 75;  // ⭐ For 100+ files, use 75 workers
-  }
-
-  console.log(`📊 Processing ${pdfFiles.length} files | Workers: ${scaledWorkers} | Pool: ${workerThreadPool ? WORKER_THREAD_POOL_SIZE : 0} threads`);
-  const limit = pLimit(scaledWorkers);  // ⭐ Use dynamic concurrency
+  const scaledWorkers = determineScaledWorkers(pdfFiles.length);
+  logger.info(`Processing ${pdfFiles.length} files | Workers(concurrency): ${scaledWorkers} | Worker pool size: ${initialPoolSize} threads`);
+  const limit = pLimit(scaledWorkers); // dynamic concurrency but capped by SAFE_MAX_WORKERS
   const startTime = Date.now();
 
   try {
@@ -951,20 +945,19 @@ export const processPDFs = async (pdfFiles, batchSize = 10, maxWorkers = 4) => {
         }
         const filteredRecords = uniqueRecords; // Use the de-duplicated list
         // 👆 --- END DEDUPLICATION --- 👆
-        console.log('📋 Extracted entities:', JSON.stringify(entities.map(e => ({
-          type: e.type,
-          value: e.value.substring(0, 30),
-          startIndex: e.startIndex
-        })), null, 2));
-
-        const logData = JSON.stringify(entities.map(e => ({
-          type: e.type,
-          value: e.value.substring(0, 30),
-          startIndex: e.startIndex
-        })), null, 2);
-
-        fs.writeFileSync('./entity-debug.json', logData);
-        console.log('✅ Entities written to entity-debug.json');
+        logger.debug('Extracted entities', { entities: entities.map(e => ({ type: e.type, value: e.value.substring(0, 30), startIndex: e.startIndex })) });
+        const logData = JSON.stringify(entities.map(e => ({ type: e.type, value: e.value.substring(0, 30), startIndex: e.startIndex })), null, 2);
+        try {
+          // Only write entity debug files when verbose debugging is enabled to avoid I/O overhead
+          if ((process.env.LOG_LEVEL || '').toLowerCase() === 'debug') {
+            const safeName = String(file.name || 'unknown').replace(/[^a-z0-9_.-]/gi, '_');
+            const outName = `./entity-debug-${safeName}-${Date.now()}.json`;
+            fs.writeFileSync(outName, logData);
+            logger.debug('Entities written to', outName);
+          }
+        } catch (e) {
+          logger.warn('Failed to write entity debug file', e && e.message);
+        }
 
 
   // Assign file name to all record types
@@ -983,7 +976,7 @@ export const processPDFs = async (pdfFiles, batchSize = 10, maxWorkers = 4) => {
           file.name
         );
 
-        console.log(`✅ [${index + 1}/${pdfFiles.length}] ${file.name} → ${filteredRecords.length} records`);
+  logger.info(`[${index + 1}/${pdfFiles.length}] ${file.name} → ${filteredRecords.length} records`);
 
         return {
           rawRecords,
@@ -993,7 +986,7 @@ export const processPDFs = async (pdfFiles, batchSize = 10, maxWorkers = 4) => {
           postProcessingJson,
         };
       } catch (fileError) {
-        console.error(`❌ [${index + 1}/${pdfFiles.length}] ${file.name}:`, fileError.message);
+        logger.error(`Error processing file ${file.name}`, fileError && fileError.message);
         return {
           rawRecords: [],
           filteredRecords: [],
@@ -1049,12 +1042,12 @@ export const processPDFs = async (pdfFiles, batchSize = 10, maxWorkers = 4) => {
       ? `${((allFilteredRecords.length / allRawRecords.length) * 100).toFixed(1)}%`
       : "0%";
 
-    console.log(`\n⏱️  Processing complete in ${processingTime}s | Success rate: ${successRate}`);
+  logger.info(`Processing complete in ${processingTime}s | Success rate: ${successRate}`);
 
     // PITFALL FIX: Cleanup worker pool after batch
     if (workerThreadPool && pdfFiles.length >= 10 && activeRequests === 0) {
-      // Keep pool alive for reuse
-      console.log('🧵 Worker pool ready for reuse');
+  // Keep pool alive for reuse
+  logger.info('Worker pool ready for reuse');
     }
 
     return {
@@ -1065,7 +1058,7 @@ export const processPDFs = async (pdfFiles, batchSize = 10, maxWorkers = 4) => {
       allPostProcessingJson,
     };
   } catch (error) {
-    console.error("Error in processPDFs:", error);
+    logger.error("Error in processPDFs:", error);
     throw error;
   }
 };
