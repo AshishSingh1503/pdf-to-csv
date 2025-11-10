@@ -25,8 +25,10 @@ if (_maxConcurrentBatches > 10) {
 
 let _batchQueueTimeout = parseInt(process.env.BATCH_QUEUE_TIMEOUT, 10);
 if (isNaN(_batchQueueTimeout) || _batchQueueTimeout < 60000) {
-  _batchQueueTimeout = 300000; // sensible default 5 minutes
-  if (process.env.BATCH_QUEUE_TIMEOUT) logger.warn('BATCH_QUEUE_TIMEOUT too low; using default 300000');
+  // Increase default batch processing timeout to 15 minutes to accommodate larger/slow Document AI workloads.
+  // Previously defaulted to 5 minutes which caused timeout failures for large batches.
+  _batchQueueTimeout = 900000; // default 15 minutes
+  if (process.env.BATCH_QUEUE_TIMEOUT) logger.warn('BATCH_QUEUE_TIMEOUT too low; using default 900000');
 }
 
 const _enableQueueLogging = (process.env.ENABLE_QUEUE_LOGGING === 'true');
