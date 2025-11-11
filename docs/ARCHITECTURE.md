@@ -1,8 +1,8 @@
-# pdf-to-csv (Comprehensive README)
+# pdf-to-csv — Comprehensive Technical Architecture Guide
 
-This file is a detailed, comprehensive README describing the project architecture, files, runtime behavior, event contracts, deployment guidance for GCP, capabilities and limitations, and recommended performance and reliability improvements.
+This file is a detailed, comprehensive architecture guide describing the project architecture, files, runtime behavior, event contracts, deployment guidance for GCP, capabilities and limitations, and recommended performance and reliability improvements.
 
-> Note: The repository already contains a `README.md`. This document is intentionally thorough and intended to be used as the canonical design and operational guide. If you prefer I can replace `README.md` with this content (confirm first) or keep both versions.
+Note: This is the comprehensive technical architecture guide. For quickstart and user-facing documentation, see the main `README.md` in the repository root. For operational documentation about batch processing, queue system, and admin APIs, see the root-level markdown files.
 
 Last updated: 2025-11-11
 
@@ -50,6 +50,7 @@ Important constraint: the queue is in-memory (singleton) and therefore not distr
   - Updates `FileMetadata` statuses and broadcasts `FILES_PROCESSED` events.
 
 Dataflow summary:
+
 ```
 Client (upload) -> Server REST -> persist FileMetadata -> enqueue(batch) -> queue manager -> worker -> DB inserts + storage upload -> file status updates -> WebSocket broadcasts -> client UI
 ```
@@ -63,12 +64,12 @@ Design tradeoffs made:
 
 ## 3) File & directory walkthrough (detailed)
 
-Top-level and important files (brief descriptions):
+-- Top-level and important files (brief descriptions):
 
-- `README.md` — existing project README (overview + quickstart). Consider consolidating with this comprehensive file.
-- `README_COMPREHENSIVE.md` — this comprehensive guide (you are reading it now).
--- `deploy.sh`, `setup-gcp.sh`, `cloud-run-config.yaml` — deployment helpers (read and adapt before running in production).
--- SQL scripts: `setup_new_db.sql` (canonical setup), `docs/sql/` (reference queries and test data) — DDL and seed scripts. See `docs/DATABASE.md` for complete database documentation.
+- `README.md` — main user-facing documentation (overview + quickstart)
+- `docs/ARCHITECTURE.md` — this comprehensive technical guide (you are reading it now)
+- `deploy.sh`, `setup-gcp.sh`, `cloud-run-config.yaml` — deployment helpers (read and adapt before running in production).
+- SQL scripts: `setup_new_db.sql` (canonical setup), `docs/sql/` (reference queries and test data) — DDL and seed scripts. See `docs/DATABASE.md` for complete database documentation.
 - `old_for_streamlit/` — legacy Python/Streamlit experiments (not used in current Node deployment).
 
 Server-side (primary runtime files are under `server/src/`):
@@ -321,9 +322,8 @@ Export metrics (example approach): instrument `BatchQueueManager` to POST metric
 
 ---
 
-If you want, I can:
-- Replace `README.md` with this content (confirm and I will overwrite the file).
-- Create `DEPLOYMENT.md` with a step-by-step Cloud Run + Cloud SQL + Cloud Storage guide including `gcloud` commands and Cloud Build config.
-- Draft a `MIGRATION_PLAN.md` that contains a concrete code-level plan to migrate the queue to Pub/Sub and worker services with sample worker code.
-
-Which next step should I take? (If you want me to overwrite the existing `README.md`, say "replace README.md".)
+For additional documentation:
+- See `docs/DEBUGGING.md` for troubleshooting batch processing issues
+- See `docs/TESTING.md` for testing procedures and validation
+- See root-level `BATCH_PROCESSING_ARCHITECTURE.md`, `QUEUE_SYSTEM.md`, and `ADMIN_API.md` for operational references
+- See `docs/README.md` for a complete documentation index

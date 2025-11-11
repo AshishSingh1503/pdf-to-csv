@@ -63,3 +63,21 @@ test_*
 temp/
 uploads/
 exports/
+
+# Archive and documentation
+archive/
+docs/
+migrations/
+test_scripts/
+
+# SQL scripts and database files
+*.sql
+database_validation_queries.sql
+setup_new_db.sql
+recreate_db.sql
+insert_test_data.sql
+
+# Expanded test files patterns
+*_test.js
+*.test.js
+test_scripts/

@@ -13,14 +13,14 @@ if (isNaN(_maxConcurrentBatches) || _maxConcurrentBatches <= 0) {
   logger.warn('MAX_CONCURRENT_BATCHES is missing or invalid. Using minimum value 1. Set MAX_CONCURRENT_BATCHES in environment to change.');
   _maxConcurrentBatches = 1;
 }
-// Clamp to reasonable bounds [1,10]
+// Clamp to reasonable bounds [1,20]
 if (_maxConcurrentBatches < 1) {
   logger.warn('MAX_CONCURRENT_BATCHES too low; clamping to 1');
   _maxConcurrentBatches = 1;
 }
-if (_maxConcurrentBatches > 10) {
-  logger.warn('MAX_CONCURRENT_BATCHES too high; clamping to 10');
-  _maxConcurrentBatches = 10;
+if (_maxConcurrentBatches > 20) {
+  logger.warn('MAX_CONCURRENT_BATCHES too high; clamping to 20');
+  _maxConcurrentBatches = 20;
 }
 
 let _batchQueueTimeout = parseInt(process.env.BATCH_QUEUE_TIMEOUT, 10);
@@ -42,7 +42,7 @@ if (isNaN(_averageBatchSeconds) || _averageBatchSeconds < 30) {
 // New: Queue capacity & graceful shutdown configuration
 let _maxQueueLength = parseInt(process.env.MAX_QUEUE_LENGTH, 10);
 if (isNaN(_maxQueueLength) || _maxQueueLength <= 0) {
-  _maxQueueLength = 100;
+  _maxQueueLength = 500;
 }
 if (_maxQueueLength < 10) {
   logger.warn('MAX_QUEUE_LENGTH too low; clamping to 10');
@@ -87,12 +87,13 @@ export const config = {
   dbUser: process.env.DB_USER || "postgres",
   dbPassword: process.env.DB_PASSWORD || "",
   dbSsl: process.env.DB_SSL === "true",
-  dbPoolMax: parseInt(process.env.DB_POOL_MAX, 10) || 200,
+  dbPoolMax: parseInt(process.env.DB_POOL_MAX, 10) || 500,
   dbPoolMin: parseInt(process.env.DB_POOL_MIN, 10) || 2,
 
   // Runtime & tuning
   logLevel: process.env.LOG_LEVEL || 'info',
-  workerThreadPoolSize: parseInt(process.env.WORKER_THREAD_POOL_SIZE, 10) || Math.max(2, Math.min(os.cpus().length, 4)),
+  // Default to 16 worker threads for high-resource environment (8 vGPU/64GB). Override with WORKER_THREAD_POOL_SIZE env var if needed.
+  workerThreadPoolSize: parseInt(process.env.WORKER_THREAD_POOL_SIZE, 10) || 16,
   cacheTtlSeconds: parseInt(process.env.CACHE_TTL, 10) || 300,
   wsPath: process.env.WS_PATH || '/ws',
   // Batch Queue configuration

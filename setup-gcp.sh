@@ -10,6 +10,14 @@ INSTANCE_NAME="pdf2csv-instance"
 DATABASE_NAME="pdf2csv_db"
 SERVICE_ACCOUNT="pdf2csv-service@pdf2csv-475708.iam.gserviceaccount.com"
 
+# NOTE: This script creates a db-f1-micro instance for development/testing.
+# For production high-performance workloads (8 vGPU/64GB backend), consider:
+# - Upgrading to db-custom-4-15360 or higher (4 vCPUs, 15GB RAM)
+# - Enabling high availability (--availability-type=REGIONAL)
+# - Increasing storage size based on data volume
+# - Configuring connection pooling (PgBouncer) for 500+ connections
+# See: https://cloud.google.com/sql/docs/postgres/instance-settings
+
 echo "🏗️ Setting up GCP infrastructure for PDF2CSV..."
 
 # 1. Set project
@@ -37,6 +45,11 @@ gcloud sql instances create $INSTANCE_NAME \
   --maintenance-window-day=SUN \
   --maintenance-window-hour=03 \
   --maintenance-release-channel=production
+
+echo "⚠️  Note: Created db-f1-micro instance for development."
+echo "    For production high-performance workloads, upgrade the instance tier:" 
+echo "    gcloud sql instances patch $INSTANCE_NAME --tier=db-custom-4-15360"
+echo ""
 
 # 4. Create database
 echo "📊 Creating database..."

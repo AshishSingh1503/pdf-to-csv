@@ -427,7 +427,7 @@ const processPDFFilesParallel = async (fileArray, collectionIdNum, fileMetadatas
   logger.info(`Prepared: ${allPreProcessRecords.length} pre + ${allPostProcessRecords.length} post records`);
     // ⭐ KEY OPTIMIZATION: Insert in chunks to avoid hitting parameter limits and excessive memory
     logger.info(`Inserting into database with chunking...`);
-    const CHUNK_SIZE = parseInt(process.env.DB_INSERT_CHUNK_SIZE, 10) || 1000;
+  const CHUNK_SIZE = parseInt(process.env.DB_INSERT_CHUNK_SIZE, 10) || 5000;
 
     const chunkAndInsert = async (Model, records, label) => {
       if (!records || records.length === 0) return 0;
@@ -799,7 +799,7 @@ export const reprocessFile = async (req, res) => {
     }));
 
     // Use chunked inserts for reprocess as well
-    const CHUNK_SIZE_REPROCESS = parseInt(process.env.DB_INSERT_CHUNK_SIZE, 10) || 1000;
+  const CHUNK_SIZE_REPROCESS = parseInt(process.env.DB_INSERT_CHUNK_SIZE, 10) || 5000;
     const chunkAndInsertLocal = async (Model, records, label) => {
       if (!records || records.length === 0) return 0;
       for (let i = 0; i < records.length; i += CHUNK_SIZE_REPROCESS) {

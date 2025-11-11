@@ -65,3 +65,6 @@ config.env
 /server/node_modules
 
 /server/output
+
+# Archive folder (legacy code kept for reference)
+# archive/

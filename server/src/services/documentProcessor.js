@@ -15,11 +15,12 @@ import { promises as fsPromises } from "fs";
 
 
 // --- CONFIGURATION & CONSTANTS ---
-const SAFE_MAX_WORKERS = 12; // Upper bound to avoid GCP rate limiting and resource exhaustion
-const BASE_WORKER_THREAD_POOL = Number(config.workerThreadPoolSize) || Math.max(2, Math.min(os.cpus().length, 4)); // configurable base pool size
+const SAFE_MAX_WORKERS = 150; // Upper bound for high-resource environment (8 vGPU/64GB) - allows aggressive parallelization
+const BASE_WORKER_THREAD_POOL = Number(config.workerThreadPoolSize) || Math.max(2, Math.min(os.cpus().length, 16)); // configurable base pool size
 const MAX_PDF_SIZE_BYTES = 50 * 1024 * 1024; // 50MB warning threshold
 const PDF_SIZE_WARN_BYTES = 30 * 1024 * 1024; // 30MB soft limit
-const BATCH_SIZE_RECORDS = 500;
+// Increased for high-resource environment (8 vGPU/64GB) to reduce DB round-trips during bulk inserts
+const BATCH_SIZE_RECORDS = 5000; // Increased for high-resource environment (8 vGPU/64GB)
 const RETRY_ATTEMPTS = 3;
 const INITIAL_BACKOFF_MS = 1000;
 const REQUEST_TIMEOUT_MS = 600000; // 10 minutes for large PDFs
@@ -30,7 +31,10 @@ const REQUEST_TIMEOUT_MS = 600000; // 10 minutes for large PDFs
 let client;
 let workerThreadPool = null;
 let activeRequests = 0;
-const MAX_CONCURRENT_REQUESTS = 15; // Hard cap for GCP quota safety
+let currentScaledWorkers = null; // dynamic reference set at runtime inside processPDFs
+// NOTE: Raised to match SAFE_MAX_WORKERS for high-performance environments so large batches can reach
+// the requested scaled worker counts (e.g. 120 workers for 100-file batches).
+const MAX_CONCURRENT_REQUESTS = 150; // Hard cap for in-flight Document AI requests (ceiling)
 
 
 try {
@@ -512,7 +516,9 @@ const retryWithBackoff = async (fn, maxRetries = RETRY_ATTEMPTS, initialDelay = 
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     try {
       // PITFALL FIX: Check active requests before attempting
-      if (activeRequests >= MAX_CONCURRENT_REQUESTS) {
+      // Use a dynamic cap based on runtime scaled workers when available, but never exceed MAX_CONCURRENT_REQUESTS or SAFE_MAX_WORKERS
+      const dynamicCap = Math.min(MAX_CONCURRENT_REQUESTS, SAFE_MAX_WORKERS, currentScaledWorkers || MAX_CONCURRENT_REQUESTS);
+      if (activeRequests >= dynamicCap) {
         const waitTime = Math.min(1000, 100 * activeRequests);
         await new Promise(resolve => setTimeout(resolve, waitTime));
       }
@@ -882,19 +888,26 @@ export const processPDFs = async (pdfFiles, batchSize = 10, maxWorkers = 4) => {
     setupGracefulShutdown();
   }
 
-  // Determine concurrency based on file count with safe upper bound
+  // Determine concurrency based on file count with aggressive scaling for high-resource environments
   const determineScaledWorkers = (count) => {
-    if (count <= 1) return 2;
-    if (count === 2) return Math.min(5, SAFE_MAX_WORKERS);
-    if (count <= 10) return Math.min(8, SAFE_MAX_WORKERS);
-    if (count <= 30) return Math.min(Math.ceil(count / 3), SAFE_MAX_WORKERS);
-    if (count <= 100) return Math.min(12, SAFE_MAX_WORKERS);
-    return SAFE_MAX_WORKERS;
+    // Aggressive scaling targets for 8 vGPU / 64GB environments
+    if (count <= 1) return 4; // small jobs get a handful of workers
+    if (count === 2) return 8;
+    if (count <= 10) return 10;
+    if (count <= 30) return Math.min(count * 2, 50); // medium batches scale up to 50
+    if (count < 100) return 80; // counts less than 100 use 80
+    if (count === 100) return 120; // exactly 100 files should use 120 workers
+    return 120; // counts greater than 100 use 120 (within SAFE_MAX_WORKERS=150)
   };
 
   const scaledWorkers = determineScaledWorkers(pdfFiles.length);
-  logger.info(`Processing ${pdfFiles.length} files | Workers(concurrency): ${scaledWorkers} | Worker pool size: ${initialPoolSize} threads`);
-  const limit = pLimit(scaledWorkers); // dynamic concurrency but capped by SAFE_MAX_WORKERS
+  // Defensive clamp against SAFE_MAX_WORKERS to future-proof deployments
+  const cappedWorkers = Math.min(scaledWorkers, SAFE_MAX_WORKERS);
+  // Expose current scaled workers to retry/backoff logic — use the capped value so backoff gating matches p-limit
+  currentScaledWorkers = cappedWorkers;
+  const effectiveRequestCap = Math.min(MAX_CONCURRENT_REQUESTS, SAFE_MAX_WORKERS, cappedWorkers);
+  logger.info(`[HIGH-PERFORMANCE MODE] Processing ${pdfFiles.length} files | Requested Workers: ${scaledWorkers} | Capped Workers: ${cappedWorkers} | Effective Request Cap: ${effectiveRequestCap} | Validation Thread Pool: ${initialPoolSize} threads | Max Capacity: ${SAFE_MAX_WORKERS}`);
+  const limit = pLimit(cappedWorkers); // dynamic concurrency but capped by SAFE_MAX_WORKERS
   const startTime = Date.now();
 
   try {
