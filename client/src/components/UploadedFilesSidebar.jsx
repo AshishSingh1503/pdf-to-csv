@@ -131,9 +131,6 @@ const UploadedFilesSidebar = ({ isOpen, onClose, selectedCollection, currentBatc
         // New: Queue full error broadcast from server (not gated by collection)
         if (message.type === 'QUEUE_FULL') {
           try {
-            const qBatchId = message.batchId;
-            const qLen = message.queueLength;
-            const qMax = message.maxLength;
             const serverMsg = message.message || 'Upload rejected: Server at capacity. Try again in a few minutes.';
             const ts = Date.now();
             // Push an error message visible regardless of selected collection

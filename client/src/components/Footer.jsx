@@ -1,6 +1,6 @@
 import React from "react";
 import { apiClient } from "../api/apiClient";
-import { useToast } from '../contexts/ToastContext'
+import { useToast } from '../contexts/useToast'
 
 const Footer = ({ customer, isPostProcess, onToggleProcess, sortField, onClearSort, selectedCollection }) => {
   const { showError } = useToast()

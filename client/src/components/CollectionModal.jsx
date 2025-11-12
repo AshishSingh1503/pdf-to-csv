@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { collectionsApi } from "../api/collectionsApi";
-import { useToast } from '../contexts/ToastContext'
+import { useToast } from '../contexts/useToast'
 
 const CollectionModal = ({ isOpen, onClose, onSave, collection = null, customer, mode = 'create' }) => {
   const [formData, setFormData] = useState({
@@ -68,8 +68,7 @@ const CollectionModal = ({ isOpen, onClose, onSave, collection = null, customer,
     }));
   };
 
-  if (!isOpen) return null;
-
+  // ensure refs and focus handlers are registered unconditionally to satisfy Rules of Hooks
   const nameRef = useRef(null)
   const modalRef = useRef(null)
   const prevActiveRef = useRef(null)
@@ -87,7 +86,7 @@ const CollectionModal = ({ isOpen, onClose, onSave, collection = null, customer,
       }, 50)
     } else {
       // restore previous focus
-      try { prevActiveRef.current?.focus() } catch (e) {}
+  try { prevActiveRef.current?.focus() } catch (_e) { void _e; /* Intentionally ignore focus restoration errors */ }
     }
   }, [isOpen])
 

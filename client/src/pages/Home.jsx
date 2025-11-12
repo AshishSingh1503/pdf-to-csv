@@ -11,7 +11,7 @@ import SearchBar from "../components/SearchBar";
 import DownloadButtons from "../components/DownloadButtons";
 import UploadedFilesSidebar from "../components/UploadedFilesSidebar";
 import ProgressBar from "../components/ProgressBar";
-import { useToast } from "../contexts/ToastContext";
+import { useToast } from "../contexts/useToast";
 import { TableSkeleton } from "../components/SkeletonLoader";
 import EmptyState from "../components/EmptyState";
 
@@ -55,7 +55,11 @@ const Home = () => {
       setCustomer({ name: customerName });
     }
 
-    const BATCH_SIZE = 25; // limit per upload batch
+  // Error handling strategy:
+  // - Sidebar shows real-time processing status via WebSocket (queue position, progress, completion)
+  // - Toast notifications only for: upload completion summary and actionable errors
+  // - Let sidebar be the primary source of truth for processing status
+  const BATCH_SIZE = 25; // limit per upload batch
     const fileChunks = [];
     for (let i = 0; i < newFiles.length; i += BATCH_SIZE) {
       fileChunks.push(newFiles.slice(i, i + BATCH_SIZE));
@@ -69,8 +73,9 @@ const Home = () => {
     setUploadProgress(0);
     setCurrentBatch(0);
 
-    let uploadSuccessful = false;
-    let abortedDueToCapacity = false;
+  let uploadSuccessful = false;
+  let abortedDueToCapacity = false;
+  let successfulBatches = 0; // count batches that were accepted (processing or queued)
 
     try {
       for (let i = 0; i < fileChunks.length; i++) {
@@ -79,7 +84,7 @@ const Home = () => {
         console.log(`Uploading batch ${i + 1}/${fileChunks.length}...`);
 
         try {
-          const data = await uploadAndProcess(batch, collectionId, (progressEvent) => {
+          await uploadAndProcess(batch, collectionId, (progressEvent) => {
             setUploadProgress(prev => {
               try {
                 if (progressEvent && progressEvent.total && progressEvent.total > 0) {
@@ -90,22 +95,15 @@ const Home = () => {
                 if (progressEvent && typeof progressEvent.loaded === 'number' && progressEvent.loaded >= 0 && progressEvent.loaded <= 1) {
                   return Math.max(0, Math.min(100, Math.round(progressEvent.loaded * 100)));
                 }
-              } catch (err) {
-                // fall through to return previous
+              } catch (_err) {
+                void _err; /* Fall through to return previous progress value */
               }
               return prev || 0;
             });
           });
 
-          // If server accepted but returned queued position, surface a light notification so users know ETA
-          try {
-            if (data && data.position !== undefined && data.position > 0) {
-              const eta = data.estimatedWaitTime ? ` Estimated wait: ${data.estimatedWaitTime}s.` : '';
-              showSuccess(`Batch queued at position ${data.position}.${eta}`);
-            }
-          } catch (e) {
-            // ignore toast failures
-          }
+          // Count this batch as accepted (either processing started or queued).
+          successfulBatches += 1;
 
           // Optional pause between batches
           await new Promise((resolve) => setTimeout(resolve, 1000));
@@ -122,10 +120,15 @@ const Home = () => {
                 else if (typeof d.position === 'number') extra = ` Position: ${d.position}.`;
                 else if (typeof d.queueLength === 'number') extra = ` Queue length: ${d.queueLength}.`;
               }
-            } catch (e) {}
+            } catch (_e) { void _e; /* Intentionally ignore queue metadata extraction errors */ }
 
-            // Notify user about capacity and stop further batches
-            showError(`Server busy: ${serverMsg}${extra}`);
+            // Notify user about capacity and stop further batches.
+            // If some batches already succeeded, report partial success.
+            if (successfulBatches > 0) {
+              showError(`Uploaded ${successfulBatches} of ${fileChunks.length} batch(es) successfully. Remaining batches rejected: ${serverMsg}${extra}`);
+            } else {
+              showError(`Upload rejected: ${serverMsg}${extra}`);
+            }
             abortedDueToCapacity = true;
             break;
           }
@@ -138,17 +141,9 @@ const Home = () => {
       // Mark upload successful if we completed the loop and did not abort due to capacity
       if (!abortedDueToCapacity) uploadSuccessful = true;
     } catch (error) {
-      // Enhanced upload error handling
-      console.error("Upload error:", error);
-      const resp = error && error.response;
-      if (resp && resp.status) {
-        showError(`Server error during upload (HTTP ${resp.status}). Please try again.`);
-      } else if (error && error.message && (error.message.includes('Network') || error.message.includes('timeout'))) {
-        showError('Network error during upload. Please check your connection and try again.');
-      } else {
-        showError('❌ Failed to process some files. Please try again.');
-      }
-
+      // Simplified upload error handling: show a single actionable error
+      console.error('Upload error:', error);
+      showError(`Upload failed: ${error?.message || 'Please check your connection and try again.'}`);
       // Ensure we do not proceed to data refresh on upload failure
       uploadSuccessful = false;
     }
@@ -161,22 +156,19 @@ const Home = () => {
         await fetchData();
       }
     } catch (err) {
+      // Don't surface a toast for refresh failures; sidebar (via WebSocket) is the single source of truth.
       console.error('Failed to refresh data after upload:', err);
-      // Inform user that uploads succeeded but UI refresh failed
-      if (uploadSuccessful) {
-        showError('Files uploaded successfully, but failed to refresh the view. Please refresh the page manually.');
-      } else if (abortedDueToCapacity) {
-        // Non-blocking warning when upload was aborted due to server capacity
-        // This keeps the user informed without marking the upload as a failure
-        showWarning('Upload was paused due to server capacity. View may be outdated; try refreshing later to update.');
-      }
     }
 
-    // Final user-facing notifications based on upload outcome
-    if (uploadSuccessful && !abortedDueToCapacity) {
-      showSuccess(`✅ Successfully uploaded ${newFiles.length} file(s) in ${fileChunks.length} batch(es).`);
-    } else if (abortedDueToCapacity && !uploadSuccessful) {
-      showError('Upload paused: server at capacity. Some files may not have been queued. Please try again in a few minutes.');
+    // Final user-facing notifications based on upload outcome. Direct users to the sidebar for processing status.
+    if (successfulBatches === fileChunks.length && successfulBatches > 0) {
+      showSuccess(`✅ Uploaded ${newFiles.length} file(s) in ${fileChunks.length} batch(es). Check the sidebar for processing status.`);
+    } else if (abortedDueToCapacity && successfulBatches > 0) {
+      showWarning(`⚠️ Partial upload: ${successfulBatches} of ${fileChunks.length} batch(es) uploaded. Check the sidebar for status.`);
+    } else if (abortedDueToCapacity && successfulBatches === 0) {
+      showError('❌ Upload rejected: Server at capacity. Please try again in a few minutes.');
+    } else if (!uploadSuccessful && successfulBatches === 0) {
+      showError('❌ Upload failed. Please try again.');
     }
 
     // Cleanup UI state. If we triggered a data refresh, let fetchData() manage loading

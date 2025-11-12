@@ -1,6 +1,6 @@
 import React from "react";
 import CollectionSelector from "./CollectionSelector";
-import { useTheme } from "../contexts/ThemeContext";
+import { useTheme } from "../contexts/useTheme";
 
 const Header = ({ customer, onUploadClick, selectedCollection, onToggleSidebar, onToggleCustomersSidebar }) => {
   const { effectiveTheme, toggleTheme } = useTheme();

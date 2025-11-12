@@ -3,7 +3,7 @@ import { customerApi } from "../api/customerApi";
 import { collectionsApi } from "../api/collectionsApi";
 import CustomerModal from "./CustomerModal";
 import CollectionModal from "./CollectionModal";
-import { useToast } from '../contexts/ToastContext'
+import { useToast } from '../contexts/useToast'
 import { SidebarSkeleton } from './SkeletonLoader'
 import EmptyState from './EmptyState'
 

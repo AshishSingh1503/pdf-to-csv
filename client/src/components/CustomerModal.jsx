@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { customerApi } from "../api/customerApi";
-import { useToast } from '../contexts/ToastContext'
+import { useToast } from '../contexts/useToast'
 
 const CustomerModal = ({ isOpen, onClose, onSave, customer, mode }) => {
   const [name, setName] = useState("");
@@ -36,7 +36,7 @@ const CustomerModal = ({ isOpen, onClose, onSave, customer, mode }) => {
         if (focusable.length && !focusable[0].contains(document.activeElement)) focusable[0].focus()
       }, 50)
     } else {
-      try { prevActiveRef.current?.focus() } catch (e) {}
+      try { prevActiveRef.current?.focus() } catch (_e) { void _e; /* Intentionally ignore focus restoration errors */ }
     }
   }, [isOpen])
 
