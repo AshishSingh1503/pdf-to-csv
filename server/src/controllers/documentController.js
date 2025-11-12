@@ -432,12 +432,25 @@ const processPDFFilesParallel = async (fileArray, collectionIdNum, fileMetadatas
     const chunkAndInsert = async (Model, records, label) => {
       if (!records || records.length === 0) return 0;
       let totalInserted = 0;
-      for (let i = 0; i < records.length; i += CHUNK_SIZE) {
-        const chunk = records.slice(i, i + CHUNK_SIZE);
+
+      // Determine columns per row from first record
+      const columnsPerRow = (records[0] && typeof records[0] === 'object') ? Object.keys(records[0]).length : 8;
+      const PARAM_LIMIT = 60000;
+
+      // Compute an effective safe chunk size for this dataset
+      const safeChunk = Math.max(1, Math.floor(PARAM_LIMIT / Math.max(columnsPerRow, 1)));
+      let effectiveChunk = Math.min(CHUNK_SIZE, safeChunk);
+
+      if (CHUNK_SIZE > safeChunk) {
+        logger.warn(`Reducing chunk size from ${CHUNK_SIZE} to safe size ${effectiveChunk} to avoid DB parameter limits (${columnsPerRow} cols per row).`);
+      }
+
+      for (let i = 0; i < records.length; i += effectiveChunk) {
+        const chunk = records.slice(i, i + effectiveChunk);
         const inserted = await Model.bulkCreate(chunk);
         const insertedCount = Array.isArray(inserted) ? inserted.length : (inserted.rowCount || 0);
         totalInserted += insertedCount;
-        logger.info(`Inserted chunk ${Math.floor(i / CHUNK_SIZE) + 1} for ${label}: ${insertedCount} rows`);
+        logger.info(`Inserted chunk ${Math.floor(i / effectiveChunk) + 1} for ${label}: ${insertedCount} rows`);
       }
       return totalInserted;
     };
@@ -799,13 +812,22 @@ export const reprocessFile = async (req, res) => {
     }));
 
     // Use chunked inserts for reprocess as well
-  const CHUNK_SIZE_REPROCESS = parseInt(process.env.DB_INSERT_CHUNK_SIZE, 10) || 5000;
+    const CHUNK_SIZE_REPROCESS = parseInt(process.env.DB_INSERT_CHUNK_SIZE, 10) || 5000;
     const chunkAndInsertLocal = async (Model, records, label) => {
       if (!records || records.length === 0) return 0;
-      for (let i = 0; i < records.length; i += CHUNK_SIZE_REPROCESS) {
-        const chunk = records.slice(i, i + CHUNK_SIZE_REPROCESS);
+
+      const columnsPerRow = (records[0] && typeof records[0] === 'object') ? Object.keys(records[0]).length : 8;
+      const PARAM_LIMIT = 60000;
+      const safeChunk = Math.max(1, Math.floor(PARAM_LIMIT / Math.max(columnsPerRow, 1)));
+      let effectiveChunk = Math.min(CHUNK_SIZE_REPROCESS, safeChunk);
+      if (CHUNK_SIZE_REPROCESS > safeChunk) {
+        logger.warn(`Reducing reprocess chunk size from ${CHUNK_SIZE_REPROCESS} to safe size ${effectiveChunk} to avoid DB parameter limits (${columnsPerRow} cols per row).`);
+      }
+
+      for (let i = 0; i < records.length; i += effectiveChunk) {
+        const chunk = records.slice(i, i + effectiveChunk);
         await Model.bulkCreate(chunk);
-        logger.info(`Reprocess inserted chunk ${Math.floor(i / CHUNK_SIZE_REPROCESS) + 1} for ${label}: ${chunk.length} rows`);
+        logger.info(`Reprocess inserted chunk ${Math.floor(i / effectiveChunk) + 1} for ${label}: ${chunk.length} rows`);
       }
     };
 

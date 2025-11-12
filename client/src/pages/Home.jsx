@@ -38,7 +38,7 @@ const Home = () => {
   const [currentBatch, setCurrentBatch] = useState(0);
   const [totalBatches, setTotalBatches] = useState(0);
   const [uploadStartTime, setUploadStartTime] = useState(null);
-  const { showSuccess, showError } = useToast();
+  const { showSuccess, showError, showWarning } = useToast();
 
   // ✅ Batch Upload Logic
   const handleUpload = async (newFiles, collectionId) => {
@@ -69,8 +69,10 @@ const Home = () => {
     setUploadProgress(0);
     setCurrentBatch(0);
 
+    let uploadSuccessful = false;
+    let abortedDueToCapacity = false;
+
     try {
-      let abortedDueToCapacity = false;
       for (let i = 0; i < fileChunks.length; i++) {
         const batch = fileChunks[i];
         setCurrentBatch(i + 1);
@@ -122,32 +124,68 @@ const Home = () => {
               }
             } catch (e) {}
 
+            // Notify user about capacity and stop further batches
             showError(`Server busy: ${serverMsg}${extra}`);
-            // stop further batches and let the upload UI reset in finally
             abortedDueToCapacity = true;
             break;
           }
 
-          // For other errors, rethrow so outer catch handles generic failures
+          // For other errors, rethrow so upload failure is handled below
           throw err;
         }
       }
 
-      await fetchData();
-      if (!abortedDueToCapacity) {
-        showSuccess(`✅ Successfully uploaded ${newFiles.length} file(s) in ${fileChunks.length} batch(es).`);
-      } else {
-        // If aborted due to capacity, refresh UI and notify user they can retry later
-        showError('Upload paused: server at capacity. Some files may not have been queued. Please try again in a few minutes.');
-      }
+      // Mark upload successful if we completed the loop and did not abort due to capacity
+      if (!abortedDueToCapacity) uploadSuccessful = true;
     } catch (error) {
+      // Enhanced upload error handling
       console.error("Upload error:", error);
-      showError("❌ Failed to process some files. Please try again.");
-    } finally {
-      setLoading(false);
-      setUploadProgress(0);
-      setCurrentBatch(0);
+      const resp = error && error.response;
+      if (resp && resp.status) {
+        showError(`Server error during upload (HTTP ${resp.status}). Please try again.`);
+      } else if (error && error.message && (error.message.includes('Network') || error.message.includes('timeout'))) {
+        showError('Network error during upload. Please check your connection and try again.');
+      } else {
+        showError('❌ Failed to process some files. Please try again.');
+      }
+
+      // Ensure we do not proceed to data refresh on upload failure
+      uploadSuccessful = false;
     }
+
+    // Refresh UI data independently of upload success; if fetch fails, warn but preserve upload success state
+    const willRefresh = uploadSuccessful || abortedDueToCapacity;
+    try {
+      // Only attempt to refresh if uploads completed or we aborted due to capacity (so UI needs update)
+      if (willRefresh) {
+        await fetchData();
+      }
+    } catch (err) {
+      console.error('Failed to refresh data after upload:', err);
+      // Inform user that uploads succeeded but UI refresh failed
+      if (uploadSuccessful) {
+        showError('Files uploaded successfully, but failed to refresh the view. Please refresh the page manually.');
+      } else if (abortedDueToCapacity) {
+        // Non-blocking warning when upload was aborted due to server capacity
+        // This keeps the user informed without marking the upload as a failure
+        showWarning('Upload was paused due to server capacity. View may be outdated; try refreshing later to update.');
+      }
+    }
+
+    // Final user-facing notifications based on upload outcome
+    if (uploadSuccessful && !abortedDueToCapacity) {
+      showSuccess(`✅ Successfully uploaded ${newFiles.length} file(s) in ${fileChunks.length} batch(es).`);
+    } else if (abortedDueToCapacity && !uploadSuccessful) {
+      showError('Upload paused: server at capacity. Some files may not have been queued. Please try again in a few minutes.');
+    }
+
+    // Cleanup UI state. If we triggered a data refresh, let fetchData() manage loading
+    // to avoid brief flicker (it sets loading=true and clears it in its own finally).
+    if (!willRefresh) {
+      setLoading(false);
+    }
+    setUploadProgress(0);
+    setCurrentBatch(0);
   };
 
   const handleHeaderUploadClick = () => {

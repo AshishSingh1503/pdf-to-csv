@@ -569,17 +569,35 @@ export const batchInsertRecords = async (records, dbClient, batchSize = BATCH_SI
   try {
     for (let i = 0; i < records.length; i += batchSize) {
       const batch = records.slice(i, i + batchSize);
-      batchCount++;
+      // Protect against PostgreSQL parameter limits: estimate params = rows * columns_per_row
+      const columnsPerRow = (batch[0] && typeof batch[0] === 'object') ? Object.keys(batch[0]).length : 8;
+      const PARAM_LIMIT = 60000;
+      let maxRowsPerInsert = Math.floor(PARAM_LIMIT / Math.max(columnsPerRow, 1));
+      if (maxRowsPerInsert < 1) maxRowsPerInsert = 1;
 
-      if (dbClient && typeof dbClient.insertBatch === 'function') {
-        const result = await dbClient.insertBatch(batch);
-        insertedCount += result.rowCount || batch.length;
-      } else if (dbClient && typeof dbClient.collection === 'function') {
-        const result = await dbClient.collection('records').insertMany(batch);
-        insertedCount += result.insertedCount;
+      if (batch.length > maxRowsPerInsert) {
+        logger.warn(`Batch of ${batch.length} rows would exceed DB parameter limit (${columnsPerRow} cols * rows > ${PARAM_LIMIT}). Splitting into chunks of ${maxRowsPerInsert}.`);
       }
 
-      logger.debug(`Batch ${batchCount}: Inserted ${batch.length} records`);
+      // If needed, split the current batch into safe-sized sub-batches
+      const subBatches = [];
+      for (let j = 0; j < batch.length; j += maxRowsPerInsert) {
+        subBatches.push(batch.slice(j, j + maxRowsPerInsert));
+      }
+
+      for (const subBatch of subBatches) {
+        batchCount++;
+
+        if (dbClient && typeof dbClient.insertBatch === 'function') {
+          const result = await dbClient.insertBatch(subBatch);
+          insertedCount += result.rowCount || subBatch.length;
+        } else if (dbClient && typeof dbClient.collection === 'function') {
+          const result = await dbClient.collection('records').insertMany(subBatch);
+          insertedCount += result.insertedCount;
+        }
+
+        logger.debug(`Batch ${batchCount}: Inserted ${subBatch.length} records`);
+      }
     }
     logger.info(`Total inserted: ${insertedCount} records in ${batchCount} batches`);
     return { insertedCount, batches: batchCount };

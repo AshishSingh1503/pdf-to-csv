@@ -25,6 +25,7 @@ An intelligent document processing system that extracts structured contact infor
 - [Getting Started](#-getting-started)
 - [Deployment](#️-deployment)
 - [Environment Configuration](#️-environment-configuration)
+- [Project Structure](#-project-structure)
 - [API Documentation](#-api-documentation)
 - [Database Schema](#-database-schema)
 - [Contributing](#-contributing)
@@ -403,6 +404,33 @@ chmod +x deploy.sh
 ./deploy.sh
 ```
 
+**Verify Deployment:**
+
+```bash
+# Check backend service status
+gcloud run services describe pdf2csv-backend --region us-central1
+
+# Check frontend service status
+gcloud run services describe pdf2csv-frontend --region us-central1
+
+# Test backend health
+curl https://pdf2csv-backend-<hash>.run.app/api/test/document-ai
+
+# View logs
+gcloud logging read "resource.type=cloud_run_revision AND resource.labels.service_name=pdf2csv-backend" --limit 50
+```
+
+**Deployment Verification Checklist:**
+- ✅ Backend service responds to health checks
+- ✅ Frontend loads and connects to backend
+- ✅ WebSocket connection establishes successfully
+- ✅ Document AI test endpoint returns success
+- ✅ Database connection is established (check logs)
+- ✅ Cloud Storage buckets are accessible
+- ✅ Environment variables are correctly set
+
+For troubleshooting deployment issues, see [docs/DEBUGGING.md](docs/DEBUGGING.md).
+
 **Deployment Process:**
 1. Builds backend Docker image
 2. Builds frontend Docker image
@@ -414,7 +442,7 @@ chmod +x deploy.sh
 
 | Service | Memory | CPU | Timeout | Reason |
 |---------|--------|-----|---------|--------|
-| Backend | 4Gi | 2 | 300s | Document AI processing + worker pool |
+| Backend | 32Gi | 8 | 1800s | Document AI processing + worker pool (high-performance) |
 | Frontend | 1Gi | 1 | 60s | Static file serving |
 
 ---
