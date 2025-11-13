@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { customerApi } from "../api/customerApi";
-import { useToast } from '../contexts/useToast'
+// Toast system removed: using console logging instead
 
 const CustomerModal = ({ isOpen, onClose, onSave, customer, mode }) => {
   const [name, setName] = useState("");
@@ -8,7 +8,7 @@ const CustomerModal = ({ isOpen, onClose, onSave, customer, mode }) => {
   const [phone, setPhone] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const { showSuccess, showError } = useToast()
+  // Replaced toast calls with console logging
   const nameRef = useRef(null)
   const modalRef = useRef(null)
   const prevActiveRef = useRef(null)
@@ -83,13 +83,13 @@ const CustomerModal = ({ isOpen, onClose, onSave, customer, mode }) => {
       } else {
         await customerApi.update(customer.id, { name, email, phone });
       }
-      onSave();
-      onClose();
-      showSuccess(mode === 'create' ? 'Customer created successfully' : 'Customer updated successfully')
+  onSave();
+  onClose();
+  console.log(mode === 'create' ? 'Customer created successfully' : 'Customer updated successfully')
     } catch (err) {
       const msg = err.response?.data?.error || `Failed to ${mode} customer.`
-      setError(msg);
-      showError(msg);
+  setError(msg);
+  console.error(msg);
     } finally {
       setLoading(false);
     }

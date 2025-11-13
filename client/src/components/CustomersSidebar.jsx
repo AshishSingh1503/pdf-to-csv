@@ -3,7 +3,7 @@ import { customerApi } from "../api/customerApi";
 import { collectionsApi } from "../api/collectionsApi";
 import CustomerModal from "./CustomerModal";
 import CollectionModal from "./CollectionModal";
-import { useToast } from '../contexts/useToast'
+// Toast system removed: using console logging and window.confirm instead
 import { SidebarSkeleton } from './SkeletonLoader'
 import EmptyState from './EmptyState'
 
@@ -64,25 +64,23 @@ const CustomersSidebar = ({ isOpen = true, onClose = () => {}, selectedCustomer,
     setShowCustomerModal(true);
   };
 
-  const { showConfirm, showError, showSuccess } = useToast()
+  // Replaced toast and confirmation UI with console/window.confirm
 
   const handleDeleteCustomer = async (customer) => {
-    showConfirm(`Are you sure you want to delete "${customer.name}"? This will also delete all associated collections and data.`, async () => {
-      try {
-        await customerApi.delete(customer.id);
-        await fetchCustomers();
-        if (onRefresh) onRefresh();
-        if (selectedCustomer && selectedCustomer.id === customer.id) {
-          onCustomerSelect(null);
-        }
-        showSuccess('Customer deleted')
-      } catch (err) {
-        showError('Failed to delete customer')
-        console.error('Error deleting customer:', err);
+    const confirmed = window.confirm(`Are you sure you want to delete "${customer.name}"? This will also delete all associated collections and data.`)
+    if (!confirmed) return
+    try {
+      await customerApi.delete(customer.id);
+      await fetchCustomers();
+      if (onRefresh) onRefresh();
+      if (selectedCustomer && selectedCustomer.id === customer.id) {
+        onCustomerSelect(null);
       }
-    }, () => {
-      // cancelled
-    })
+      console.log('Customer deleted')
+    } catch (err) {
+      console.error('Failed to delete customer')
+      console.error('Error deleting customer:', err);
+    }
   };
 
   const handleCreateCollection = (customer) => {

@@ -11,7 +11,6 @@ import SearchBar from "../components/SearchBar";
 import DownloadButtons from "../components/DownloadButtons";
 import UploadedFilesSidebar from "../components/UploadedFilesSidebar";
 import ProgressBar from "../components/ProgressBar";
-import { useToast } from "../contexts/useToast";
 import { TableSkeleton } from "../components/SkeletonLoader";
 import EmptyState from "../components/EmptyState";
 
@@ -38,14 +37,13 @@ const Home = () => {
   const [currentBatch, setCurrentBatch] = useState(0);
   const [totalBatches, setTotalBatches] = useState(0);
   const [uploadStartTime, setUploadStartTime] = useState(null);
-  const { showSuccess, showError, showWarning } = useToast();
 
   // ✅ Batch Upload Logic
   const handleUpload = async (newFiles, collectionId) => {
     if (!newFiles.length) return;
 
     if (!collectionId) {
-      showError("Please select a collection before uploading files");
+      console.error("Please select a collection before uploading files");
       return;
     }
 
@@ -109,7 +107,7 @@ const Home = () => {
           await new Promise((resolve) => setTimeout(resolve, 1000));
         } catch (err) {
           // Axios-like error handling to detect HTTP 503 + queueFull responses
-          const resp = err && err.response;
+            const resp = err && err.response;
           if (resp && resp.status === 503) {
             const d = resp.data || {};
             const serverMsg = d.error || d.message || 'Server is at capacity. Please try again in a few minutes.';
@@ -125,9 +123,9 @@ const Home = () => {
             // Notify user about capacity and stop further batches.
             // If some batches already succeeded, report partial success.
             if (successfulBatches > 0) {
-              showError(`Uploaded ${successfulBatches} of ${fileChunks.length} batch(es) successfully. Remaining batches rejected: ${serverMsg}${extra}`);
+              console.error(`Uploaded ${successfulBatches} of ${fileChunks.length} batch(es) successfully. Remaining batches rejected: ${serverMsg}${extra}`);
             } else {
-              showError(`Upload rejected: ${serverMsg}${extra}`);
+              console.error(`Upload rejected: ${serverMsg}${extra}`);
             }
             abortedDueToCapacity = true;
             break;
@@ -143,7 +141,7 @@ const Home = () => {
     } catch (error) {
       // Simplified upload error handling: show a single actionable error
       console.error('Upload error:', error);
-      showError(`Upload failed: ${error?.message || 'Please check your connection and try again.'}`);
+      console.error(`Upload failed: ${error?.message || 'Please check your connection and try again.'}`);
       // Ensure we do not proceed to data refresh on upload failure
       uploadSuccessful = false;
     }
@@ -162,13 +160,13 @@ const Home = () => {
 
     // Final user-facing notifications based on upload outcome. Direct users to the sidebar for processing status.
     if (successfulBatches === fileChunks.length && successfulBatches > 0) {
-      showSuccess(`✅ Uploaded ${newFiles.length} file(s) in ${fileChunks.length} batch(es). Check the sidebar for processing status.`);
+      console.log(`✅ Uploaded ${newFiles.length} file(s) in ${fileChunks.length} batch(es). Check the sidebar for processing status.`);
     } else if (abortedDueToCapacity && successfulBatches > 0) {
-      showWarning(`⚠️ Partial upload: ${successfulBatches} of ${fileChunks.length} batch(es) uploaded. Check the sidebar for status.`);
+      console.warn(`⚠️ Partial upload: ${successfulBatches} of ${fileChunks.length} batch(es) uploaded. Check the sidebar for status.`);
     } else if (abortedDueToCapacity && successfulBatches === 0) {
-      showError('❌ Upload rejected: Server at capacity. Please try again in a few minutes.');
+      console.error('❌ Upload rejected: Server at capacity. Please try again in a few minutes.');
     } else if (!uploadSuccessful && successfulBatches === 0) {
-      showError('❌ Upload failed. Please try again.');
+      console.error('❌ Upload failed. Please try again.');
     }
 
     // Cleanup UI state. If we triggered a data refresh, let fetchData() manage loading
@@ -188,7 +186,7 @@ const Home = () => {
     const selectedFiles = [...e.target.files];
     if (selectedFiles.length > 0) {
       if (!selectedCollection) {
-        showError("Please select a collection before uploading files");
+        console.error("Please select a collection before uploading files");
         return;
       }
       handleUpload(selectedFiles, selectedCollection.id);

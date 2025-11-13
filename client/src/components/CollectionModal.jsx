@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { collectionsApi } from "../api/collectionsApi";
-import { useToast } from '../contexts/useToast'
+// Toast system removed: using console logging instead
 
 const CollectionModal = ({ isOpen, onClose, onSave, collection = null, customer, mode = 'create' }) => {
   const [formData, setFormData] = useState({
@@ -30,7 +30,7 @@ const CollectionModal = ({ isOpen, onClose, onSave, collection = null, customer,
     }
   }, [isOpen, mode, collection, customer]);
 
-  const { showSuccess, showError } = useToast()
+  // Replaced toast calls with console logging
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -48,13 +48,13 @@ const CollectionModal = ({ isOpen, onClose, onSave, collection = null, customer,
       } else {
         await collectionsApi.update(collection.id, formData);
       }
-      onSave();
-      onClose();
-      showSuccess(mode === 'create' ? 'Collection created successfully' : 'Collection updated successfully')
+  onSave();
+  onClose();
+  console.log(mode === 'create' ? 'Collection created successfully' : 'Collection updated successfully')
     } catch (err) {
       const msg = err.response?.data?.error || 'Failed to save collection'
-      setError(msg);
-      showError(msg);
+  setError(msg);
+  console.error(msg);
     } finally {
       setLoading(false);
     }
