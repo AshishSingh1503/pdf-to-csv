@@ -389,7 +389,15 @@ const Home = () => {
           onUploadClick={handleHeaderUploadClick}
           selectedCollection={selectedCollection}
           onToggleSidebar={() => setIsSidebarOpen(!isSidebarOpen)}
-          onToggleCustomersSidebar={() => setCustomersSidebarOpen(prev => !prev)}
+          onToggleCustomersSidebar={() => {
+            try {
+              if (typeof window !== 'undefined' && window.matchMedia('(min-width: 1024px)').matches) {
+                // desktop - no-op to avoid confusing users (sidebar is always visible on desktop)
+                return;
+              }
+            } catch (_e) { void _e; }
+            setCustomersSidebarOpen(prev => !prev)
+          }}
         />
 
         <main className="flex-1 overflow-y-auto">

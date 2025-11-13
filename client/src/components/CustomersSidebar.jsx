@@ -12,6 +12,7 @@ const CustomersSidebar = ({ isOpen = true, onClose = () => {}, selectedCustomer,
   const [collections, setCollections] = useState({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [isDesktop, setIsDesktop] = useState(false);
   const [showCustomerModal, setShowCustomerModal] = useState(false);
   const [showCollectionModal, setShowCollectionModal] = useState(false);
   const [modalMode, setModalMode] = useState('create');
@@ -44,6 +45,23 @@ const CustomersSidebar = ({ isOpen = true, onClose = () => {}, selectedCustomer,
 
   useEffect(() => {
     fetchCustomers();
+  }, []);
+
+  // track desktop breakpoint so aria-hidden reflects actual visibility
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const mq = window.matchMedia('(min-width: 1024px)');
+    const handle = (e) => setIsDesktop(e.matches);
+    // set initial
+    setIsDesktop(mq.matches);
+    if (mq.addEventListener) mq.addEventListener('change', handle);
+    else mq.addListener(handle);
+    return () => {
+      try {
+        if (mq.removeEventListener) mq.removeEventListener('change', handle);
+        else mq.removeListener(handle);
+      } catch (_e) { void _e; }
+    };
   }, []);
 
   useEffect(() => {
@@ -100,9 +118,11 @@ const CustomersSidebar = ({ isOpen = true, onClose = () => {}, selectedCustomer,
     if (onRefresh) onRefresh();
   };
 
+  const isActuallyVisible = isOpen || isDesktop;
+
   return (
     <div className={`w-full lg:w-80 fixed lg:relative left-0 top-0 h-full z-40 transform transition-transform duration-300 bg-white dark:bg-slate-800 border-r ${!isOpen ? '-translate-x-full lg:translate-x-0' : 'translate-x-0'}`}
-      aria-hidden={!isOpen}
+      aria-hidden={!isActuallyVisible}
     >
       <div className="flex items-center justify-between p-4 border-b border-gray-200">
         <h2 className="text-lg font-semibold text-gray-900 dark:text-slate-100">Customers</h2>
