@@ -8,7 +8,7 @@ Last updated: 2025-11-11
 
 ## Table of contents
 
-1. Project summary
+1. Project summary 
 2. High-level architecture
 3. File & directory walkthrough (complete)
 4. Event contracts and WebSocket messages

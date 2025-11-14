@@ -5,7 +5,7 @@ import socket from '../services/websocket';
 import ProgressBar from './ProgressBar';
 import EmptyState from './EmptyState'
 
-const UploadedFilesSidebar = ({ isOpen, onClose, selectedCollection, currentBatch = 0, totalBatches = 0 }) => {
+const UploadedFilesSidebar = ({ isOpen, onClose, selectedCollection, onRefresh, currentBatch = 0, totalBatches = 0 }) => {
   const [files, setFiles] = useState([]);
   const [loading, setLoading] = useState(false);
   const [activeBatches, setActiveBatches] = useState({});
@@ -306,6 +306,7 @@ const UploadedFilesSidebar = ({ isOpen, onClose, selectedCollection, currentBatc
           timeoutsRef.current.push(removeTid);
           // refresh files list (debounced)
           scheduleFetchFiles();
+          if (onRefresh) onRefresh();
           // auto remove success message after 5s — capture ts to remove specific one
           const tid = setTimeout(() => {
             // dismiss by batchId so we remove the consolidated batch message
@@ -334,6 +335,7 @@ const UploadedFilesSidebar = ({ isOpen, onClose, selectedCollection, currentBatc
           }, 10000);
           timeoutsRef.current.push(removeFailTid);
           scheduleFetchFiles();
+          if (onRefresh) onRefresh();
         }
 
         // Individual file events (backwards compatibility)
@@ -372,6 +374,7 @@ const UploadedFilesSidebar = ({ isOpen, onClose, selectedCollection, currentBatc
         }
         if (message.type === 'FILE_REPROCESSED' && matchesCollection) {
           fetchFiles();
+          if (onRefresh) onRefresh();
         }
         if (message.type === 'WS_RECONNECTED') {
           // On reconnect, refresh files to avoid missed events while disconnected
@@ -585,7 +588,7 @@ const UploadedFilesSidebar = ({ isOpen, onClose, selectedCollection, currentBatc
                             }
                             return (
                               <div className="mt-2">
-                                <ProgressBar progress={batch.progress} showPercentage={true} label={batch.message || 'Processing'} estimatedTimeRemaining={eta} />
+                                {/* <ProgressBar progress={batch.progress} showPercentage={true} label={batch.message || 'Processing'} estimatedTimeRemaining={eta} /> */}
                               </div>
                             )
                           })() : null}
@@ -656,6 +659,27 @@ const UploadedFilesSidebar = ({ isOpen, onClose, selectedCollection, currentBatc
 
           {(!loading && (!files || files.length === 0) && getActiveBatchCount() === 0) && (
             <EmptyState icon="📄" title="No active batches" description="Upload files to see batch processing status" />
+          )}
+
+          {/* Uploaded Files Section */}
+          {files && files.length > 0 && (
+            <div className="mt-4">
+              <h3 className="font-semibold text-sm dark:text-slate-100 mb-2">
+                Uploaded Files ({files.length})
+              </h3>
+              <ul className="space-y-2">
+                {files.map((file) => (
+                  <li key={file.id} className="p-2 bg-gray-50 dark:bg-gray-700 rounded-md flex items-center justify-between">
+                    <div className="truncate">
+                      <p className="text-sm font-medium text-gray-900 dark:text-white">{file.original_filename}</p>
+                      <p className="text-xs text-gray-500 dark:text-gray-400">
+                        Status: <span className={`font-semibold ${file.processing_status === 'completed' ? 'text-green-500' : 'text-yellow-500'}`}>{file.processing_status}</span>
+                      </p>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </div>
           )}
         </div>
       </div>

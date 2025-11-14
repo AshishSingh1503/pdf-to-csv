@@ -71,80 +71,51 @@ const Home = () => {
     setUploadProgress(0);
     setCurrentBatch(0);
 
-  let uploadSuccessful = false;
   let abortedDueToCapacity = false;
-  let successfulBatches = 0; // count batches that were accepted (processing or queued)
+  let successfulBatches = 0;
+  let failedBatches = 0;
 
-    try {
-      for (let i = 0; i < fileChunks.length; i++) {
-        const batch = fileChunks[i];
-        setCurrentBatch(i + 1);
-        console.log(`Uploading batch ${i + 1}/${fileChunks.length}...`);
+    for (let i = 0; i < fileChunks.length; i++) {
+      const batch = fileChunks[i];
+      setCurrentBatch(i + 1);
+      console.log(`Uploading batch ${i + 1}/${fileChunks.length}...`);
 
-        try {
-          await uploadAndProcess(batch, collectionId, (progressEvent) => {
-            setUploadProgress(prev => {
-              try {
-                if (progressEvent && progressEvent.total && progressEvent.total > 0) {
-                  const pct = Math.round((progressEvent.loaded * 100) / progressEvent.total);
-                  return Math.max(0, Math.min(100, pct));
-                }
-                // Some XHR implementations may provide a fractional loaded (0-1)
-                if (progressEvent && typeof progressEvent.loaded === 'number' && progressEvent.loaded >= 0 && progressEvent.loaded <= 1) {
-                  return Math.max(0, Math.min(100, Math.round(progressEvent.loaded * 100)));
-                }
-              } catch (_err) {
-                void _err; /* Fall through to return previous progress value */
-              }
-              return prev || 0;
-            });
-          });
-
-          // Count this batch as accepted (either processing started or queued).
-          successfulBatches += 1;
-
-          // Optional pause between batches
-          await new Promise((resolve) => setTimeout(resolve, 1000));
-        } catch (err) {
-          // Axios-like error handling to detect HTTP 503 + queueFull responses
-            const resp = err && err.response;
-          if (resp && resp.status === 503) {
-            const d = resp.data || {};
-            const serverMsg = d.error || d.message || 'Server is at capacity. Please try again in a few minutes.';
-            let extra = '';
+      try {
+        await uploadAndProcess(batch, collectionId, (progressEvent) => {
+          setUploadProgress(prev => {
             try {
-              if (d.queueFull) {
-                if (d.estimatedWaitTime) extra = ` Estimated wait: ${d.estimatedWaitTime}s.`;
-                else if (typeof d.position === 'number') extra = ` Position: ${d.position}.`;
-                else if (typeof d.queueLength === 'number') extra = ` Queue length: ${d.queueLength}.`;
+              if (progressEvent && progressEvent.total && progressEvent.total > 0) {
+                const pct = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+                return Math.max(0, Math.min(100, pct));
               }
-            } catch (_e) { void _e; /* Intentionally ignore queue metadata extraction errors */ }
-
-            // Notify user about capacity and stop further batches.
-            // If some batches already succeeded, report partial success.
-            if (successfulBatches > 0) {
-              console.error(`Uploaded ${successfulBatches} of ${fileChunks.length} batch(es) successfully. Remaining batches rejected: ${serverMsg}${extra}`);
-            } else {
-              console.error(`Upload rejected: ${serverMsg}${extra}`);
+              if (progressEvent && typeof progressEvent.loaded === 'number' && progressEvent.loaded >= 0 && progressEvent.loaded <= 1) {
+                return Math.max(0, Math.min(100, Math.round(progressEvent.loaded * 100)));
+              }
+            } catch (_err) {
+              void _err;
             }
-            abortedDueToCapacity = true;
-            break;
-          }
+            return prev || 0;
+          });
+        });
 
-          // For other errors, rethrow so upload failure is handled below
-          throw err;
+        successfulBatches += 1;
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      } catch (err) {
+        failedBatches += 1;
+        const resp = err && err.response;
+        if (resp && resp.status === 503) {
+          const d = resp.data || {};
+          const serverMsg = d.error || d.message || 'Server is at capacity. Please try again in a few minutes.';
+          console.error(`Batch ${i + 1} rejected: ${serverMsg}`);
+          abortedDueToCapacity = true;
+          break; 
+        } else {
+          console.error(`Batch ${i + 1} failed to upload:`, err.message);
         }
       }
-
-      // Mark upload successful if we completed the loop and did not abort due to capacity
-      if (!abortedDueToCapacity) uploadSuccessful = true;
-    } catch (error) {
-      // Simplified upload error handling: show a single actionable error
-      console.error('Upload error:', error);
-      console.error(`Upload failed: ${error?.message || 'Please check your connection and try again.'}`);
-      // Ensure we do not proceed to data refresh on upload failure
-      uploadSuccessful = false;
     }
+
+    const uploadSuccessful = successfulBatches > 0 && failedBatches === 0;
 
     // Refresh UI data independently of upload success; if fetch fails, warn but preserve upload success state
     const willRefresh = uploadSuccessful || abortedDueToCapacity;
@@ -158,15 +129,15 @@ const Home = () => {
       console.error('Failed to refresh data after upload:', err);
     }
 
-    // Final user-facing notifications based on upload outcome. Direct users to the sidebar for processing status.
-    if (successfulBatches === fileChunks.length && successfulBatches > 0) {
-      console.log(`✅ Uploaded ${newFiles.length} file(s) in ${fileChunks.length} batch(es). Check the sidebar for processing status.`);
-    } else if (abortedDueToCapacity && successfulBatches > 0) {
-      console.warn(`⚠️ Partial upload: ${successfulBatches} of ${fileChunks.length} batch(es) uploaded. Check the sidebar for status.`);
-    } else if (abortedDueToCapacity && successfulBatches === 0) {
+    // Final user-facing notifications based on upload outcome
+    if (successfulBatches === fileChunks.length) {
+      console.log(`✅ All ${successfulBatches} batches uploaded successfully (${newFiles.length} files).`);
+    } else if (successfulBatches > 0) {
+      console.warn(`⚠️ Partial upload complete: ${successfulBatches} of ${fileChunks.length} batches succeeded, ${failedBatches} failed.`);
+    } else if (abortedDueToCapacity) {
       console.error('❌ Upload rejected: Server at capacity. Please try again in a few minutes.');
-    } else if (!uploadSuccessful && successfulBatches === 0) {
-      console.error('❌ Upload failed. Please try again.');
+    } else {
+      console.error(`❌ Upload failed: All ${failedBatches} batches failed.`);
     }
 
     // Cleanup UI state. If we triggered a data refresh, let fetchData() manage loading
@@ -487,6 +458,7 @@ const Home = () => {
         isOpen={isSidebarOpen}
         onClose={() => setIsSidebarOpen(false)}
         selectedCollection={selectedCollection}
+        onRefresh={fetchData}
         currentBatch={currentBatch}
         totalBatches={totalBatches}
       />
