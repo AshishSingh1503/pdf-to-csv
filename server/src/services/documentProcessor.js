@@ -21,9 +21,17 @@ const MAX_PDF_SIZE_BYTES = 50 * 1024 * 1024; // 50MB warning threshold
 const PDF_SIZE_WARN_BYTES = 30 * 1024 * 1024; // 30MB soft limit
 // Increased for high-resource environment (8 vGPU/64GB) to reduce DB round-trips during bulk inserts
 const BATCH_SIZE_RECORDS = 5000; // Increased for high-resource environment (8 vGPU/64GB)
-const RETRY_ATTEMPTS = 3;
-const INITIAL_BACKOFF_MS = 1000;
-const REQUEST_TIMEOUT_MS = 600000; // 10 minutes for large PDFs
+const RETRY_ATTEMPTS = parseInt(process.env.RETRY_ATTEMPTS, 10) || 3;
+const INITIAL_BACKOFF_MS = parseInt(process.env.INITIAL_BACKOFF_MS, 10) || 1000;
+
+// Document AI request timeout (ms). Default to 20 minutes (1200000ms). Allow override via env.
+const _requestedTimeout = parseInt(process.env.REQUEST_TIMEOUT_MS, 10);
+const REQUEST_TIMEOUT_MS = (Number.isFinite(_requestedTimeout) && _requestedTimeout >= 60000) ? _requestedTimeout : 1200000;
+if (!Number.isFinite(_requestedTimeout) && process.env.REQUEST_TIMEOUT_MS) {
+  logger.warn('REQUEST_TIMEOUT_MS invalid; using default 1200000');
+} else if (Number.isFinite(_requestedTimeout) && _requestedTimeout < 60000) {
+  logger.warn('REQUEST_TIMEOUT_MS too small; minimum is 60000ms. Using default 1200000');
+}
 
 
 
@@ -537,15 +545,19 @@ const retryWithBackoff = async (fn, maxRetries = RETRY_ATTEMPTS, initialDelay = 
       activeRequests--;
       lastError = error;
 
-      const isRateLimit = error.code === 429 ||
-        error.message?.includes('RESOURCE_EXHAUSTED') ||
-        error.message?.includes('Rate limit');
+  const msg = (error && error.message) ? String(error.message) : '';
+  const isRateLimit = error && (error.code === 429 || msg.includes('RESOURCE_EXHAUSTED') || msg.toLowerCase().includes('rate limit'));
+  // Only treat explicit internal 'Request timeout' errors as retryable timeouts.
+  // Avoid broad 'timeout' substring matches that may misclassify unrelated errors.
+  const isTimeout = msg === 'Request timeout' || msg.toLowerCase() === 'request timeout' || msg.includes('Request timeout');
 
-      if (isRateLimit && attempt < maxRetries - 1) {
+      // Retry on rate limits or timeouts with exponential backoff
+      if ((isRateLimit || isTimeout) && attempt < maxRetries - 1) {
         const delay = initialDelay * Math.pow(2, attempt);
-        logger.warn(`Rate limited. Retrying after ${delay}ms (attempt ${attempt + 1}/${maxRetries})`);
+        logger.warn(`${isRateLimit ? 'Rate limited' : 'Request timeout'}. Retrying after ${delay}ms (attempt ${attempt + 1}/${maxRetries})`);
         await new Promise(resolve => setTimeout(resolve, delay));
-      } else if (!isRateLimit) {
+      } else if (!isRateLimit && !isTimeout) {
+        // Non-retryable error — rethrow immediately
         throw error;
       }
     }

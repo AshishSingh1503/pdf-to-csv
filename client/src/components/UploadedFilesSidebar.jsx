@@ -3,7 +3,6 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { getUploadedFiles, getBatchStatus } from '../api/documentApi';
 import socket from '../services/websocket';
 import ProgressBar from './ProgressBar';
-import { FileCardSkeleton } from './SkeletonLoader'
 import EmptyState from './EmptyState'
 
 const UploadedFilesSidebar = ({ isOpen, onClose, selectedCollection, currentBatch = 0, totalBatches = 0 }) => {
@@ -59,7 +58,7 @@ const UploadedFilesSidebar = ({ isOpen, onClose, selectedCollection, currentBatc
   }, [isOpen, selectedCollection, fetchFiles]);
 
   useEffect(() => {
-    const handler = (event) => {
+    const handler = async (event) => {
       try {
         const message = JSON.parse(event.data);
 
@@ -79,6 +78,40 @@ const UploadedFilesSidebar = ({ isOpen, onClose, selectedCollection, currentBatc
           } else if (batchId && activeBatchesRef.current && activeBatchesRef.current[batchId]) {
             // Accept events for batches we already track locally
             matchesCollection = true;
+          }
+        }
+
+        // Edge-case handling: Sometimes the server emits BATCH_PROCESSING_STARTED or
+        // BATCH_PROCESSING_PROGRESS without a collectionId and before this UI has
+        // observed the queued event. In that case try to hydrate the batch from the
+        // server and seed a minimal activeBatches entry so the event is applied to
+        // the currently selected collection.
+        if (!matchesCollection && selectedCollection && !collectionId && batchId &&
+            (message.type === 'BATCH_PROCESSING_STARTED' || message.type === 'BATCH_PROCESSING_PROGRESS')) {
+          try {
+            const resp = await getBatchStatus(batchId);
+            const respCollection = resp && (resp.collectionId ?? resp.collection_id ?? resp.collection);
+            if (resp && (resp.success === undefined || resp.success) && respCollection !== undefined && Number(respCollection) === Number(selectedCollection.id)) {
+              // Seed a minimal batch entry so the rest of the handler can proceed
+              const counts = resp.counts || {};
+              const files = resp.files || [];
+              const total = counts.total || files.length || message.fileCount || 0;
+              const startedAt = resp.startedAt ? new Date(resp.startedAt) : (message.startedAt ? new Date(message.startedAt) : undefined);
+              const seed = {
+                batchId,
+                status: message.status || 'processing',
+                queueStatus: 'processing',
+                message: message.message || 'Processing...',
+                fileCount: total,
+                progress: typeof message.progress === 'number' ? message.progress : undefined,
+                startTime: startedAt,
+                lastUpdate: new Date(),
+              };
+              setActiveBatches(prev => ({ ...prev, [batchId]: { ...(prev[batchId] || {}), ...seed } }));
+              matchesCollection = true;
+            }
+          } catch (err) {
+            console.warn('Failed to hydrate batch for missing collectionId', err);
           }
         }
 
@@ -102,7 +135,7 @@ const UploadedFilesSidebar = ({ isOpen, onClose, selectedCollection, currentBatc
             progress: existing ? existing.progress : undefined,
           };
           setActiveBatches(prev => ({ ...prev, [batchId]: { ...(prev[batchId] || {}), ...merged } }));
-          setBatchMessages(prev => [{ text: merged.message, type: 'info', ts: Date.now() }, ...prev].slice(0, 5));
+          addOrReplaceMessage({ text: merged.message, type: 'info', ts: Date.now(), batchId });
         }
 
         // New: Batch queued (position/ETA)
@@ -125,7 +158,7 @@ const UploadedFilesSidebar = ({ isOpen, onClose, selectedCollection, currentBatc
             lastUpdate: new Date(),
           };
           setActiveBatches(prev => ({ ...prev, [batchId]: { ...(prev[batchId] || {}), ...batchObj } }));
-          setBatchMessages(prev => [{ text: `📋 Batch queued (position ${batchObj.queuePosition ?? '?'})`, type: 'info', ts: Date.now() }, ...prev].slice(0, 5));
+          addOrReplaceMessage({ text: `📋 Batch queued (position ${batchObj.queuePosition ?? '?'})`, type: 'info', ts: Date.now(), batchId });
         }
 
         // New: Queue full error broadcast from server (not gated by collection)
@@ -133,42 +166,18 @@ const UploadedFilesSidebar = ({ isOpen, onClose, selectedCollection, currentBatc
           try {
             const serverMsg = message.message || 'Upload rejected: Server at capacity. Try again in a few minutes.';
             const ts = Date.now();
-            // Push an error message visible regardless of selected collection
-            setBatchMessages(prev => [{ text: serverMsg, type: 'error', ts }, ...prev].slice(0, 5));
-            // Auto-dismiss after ~10s
-            const tid = setTimeout(() => {
-              setBatchMessages(prev => prev.filter(m => m.ts !== ts));
-            }, 10000);
-            timeoutsRef.current.push(tid);
+            // Push an error message visible regardless of selected collection; do NOT auto-dismiss
+            addOrReplaceMessage({ text: serverMsg, type: 'error', ts, scope: 'global' });
           } catch (err) {
             console.warn('Failed to handle QUEUE_FULL message', err);
           }
         }
 
-        // New: Batch dequeued (removed from queue before processing)
-        if (message.type === 'BATCH_DEQUEUED' && matchesCollection) {
-          if (!batchId) return;
-          setActiveBatches(prev => {
-            const copy = { ...prev };
-            const existing = copy[batchId];
-            if (!existing) return prev;
-            // only act if the batch is still queued
-            if (existing.queueStatus && existing.queueStatus !== 'queued') return prev;
-            // mark transient dequeued state so UI can show it briefly
-            copy[batchId] = { ...existing, queueStatus: 'dequeued', lastUpdate: new Date() };
-            return copy;
-          });
-          setBatchMessages(prev => [{ text: `⚠️ Batch dequeued/cancelled (${batchId})`, type: 'info', ts: Date.now() }, ...prev].slice(0, 5));
-          // remove from activeBatches shortly after to avoid lingering UI
-          const removeTid = setTimeout(() => {
-            setActiveBatches(prev => {
-              const copy = { ...prev };
-              delete copy[batchId];
-              return copy;
-            });
-          }, 750);
-          timeoutsRef.current.push(removeTid);
-        }
+        // Note: BATCH_DEQUEUED events are intentionally ignored here. The server
+        // emits a dequeued event as part of the normal queued->processing transition
+        // and it is followed immediately by BATCH_PROCESSING_STARTED. Handling
+        // dequeued as a transient cancellation caused confusing warnings in the UI,
+        // so we do not act on it.
 
         // New: Queue position updated for existing queued batches
         if (message.type === 'BATCH_QUEUE_POSITION_UPDATED' && matchesCollection) {
@@ -189,7 +198,7 @@ const UploadedFilesSidebar = ({ isOpen, onClose, selectedCollection, currentBatc
             copy[batchId] = { ...existing, queuePosition: newPos, estimatedWaitTime: newEst, totalQueued: newTotal, lastUpdate: new Date() };
             // optionally add a subtle message if position improved noticeably
             if (existing.queuePosition && typeof newPos === 'number' && newPos < existing.queuePosition) {
-              setBatchMessages(prevMsgs => [{ text: `📈 Queue position updated: ${newPos}`, type: 'info', ts: Date.now() }, ...prevMsgs].slice(0, 5));
+              addOrReplaceMessage({ text: `📈 Queue position updated: ${newPos}`, type: 'info', ts: Date.now(), batchId });
             }
             return copy;
           });
@@ -270,7 +279,7 @@ const UploadedFilesSidebar = ({ isOpen, onClose, selectedCollection, currentBatc
 
           if (message.status === 'database_insert_complete' || message.status === 'cloud_upload_complete') {
             const msg = message.status === 'database_insert_complete' ? 'Records inserted into database' : 'Files uploaded to cloud';
-            setBatchMessages(prev => [{ text: msg, type: 'info', ts: Date.now() }, ...prev].slice(0, 5));
+            addOrReplaceMessage({ text: msg, type: 'info', ts: Date.now(), batchId });
           }
         }
 
@@ -285,7 +294,7 @@ const UploadedFilesSidebar = ({ isOpen, onClose, selectedCollection, currentBatc
             }
             return copy;
           });
-          setBatchMessages(prev => [{ text: `✅ Batch completed successfully (${message.fileCount || 0} files)`, type: 'success', ts }, ...prev].slice(0, 5));
+          addOrReplaceMessage({ text: `✅ Batch completed successfully (${message.fileCount || 0} files)`, type: 'success', ts, batchId });
           // remove after short delay so user sees completion state
           const removeTid = setTimeout(() => {
             setActiveBatches(prev => {
@@ -299,7 +308,8 @@ const UploadedFilesSidebar = ({ isOpen, onClose, selectedCollection, currentBatc
           scheduleFetchFiles();
           // auto remove success message after 5s — capture ts to remove specific one
           const tid = setTimeout(() => {
-            setBatchMessages(prev => prev.filter(m => m.ts !== ts));
+            // dismiss by batchId so we remove the consolidated batch message
+            dismissMessage(batchId);
           }, 5000);
           timeoutsRef.current.push(tid);
         }
@@ -314,7 +324,7 @@ const UploadedFilesSidebar = ({ isOpen, onClose, selectedCollection, currentBatc
             }
             return copy;
           });
-          setBatchMessages(prev => [{ text: `❌ Batch processing failed: ${message.error || 'unknown'}`, type: 'error', ts: Date.now() }, ...prev].slice(0, 5));
+          addOrReplaceMessage({ text: `❌ Batch processing failed: ${message.error || 'unknown'}`, type: 'error', ts: Date.now(), batchId });
           const removeFailTid = setTimeout(() => {
             setActiveBatches(prev => {
               const copy = { ...prev };
@@ -442,7 +452,35 @@ const UploadedFilesSidebar = ({ isOpen, onClose, selectedCollection, currentBatc
   };
 
   const dismissMessage = (ts) => {
-    setBatchMessages(prev => prev.filter(m => m.ts !== ts));
+    // allow dismissing by batchId or by ts for legacy messages
+    setBatchMessages(prev => prev.filter(m => {
+      if (!m) return false;
+      if (typeof ts === 'string' && m.batchId && m.batchId === ts) return false;
+      if (m.ts === ts) return false;
+      return true;
+    }));
+  };
+
+  // Add or replace batch/global messages. For batch-scoped messages include
+  // batchId so we keep at most one message per batch. Global messages use
+  // scope: 'global' and are not replaced.
+  const addOrReplaceMessage = (newMsg) => {
+    setBatchMessages(prev => {
+      // Prepend new message, but drop existing messages for the same batchId
+      const merged = [newMsg, ...prev.filter(m => !(newMsg.batchId && m.batchId && m.batchId === newMsg.batchId))];
+      // Deduplicate by key (batchId or global ts) while preserving order
+      const seen = new Set();
+      const out = [];
+      for (const m of merged) {
+        const key = m.batchId ? `b:${m.batchId}` : `g:${m.ts}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          out.push(m);
+        }
+      }
+      // Keep a reasonable cap to avoid unbounded growth
+      return out.slice(0, 10);
+    });
   };
 
   const getActiveBatchCount = () => Object.keys(activeBatches).length;
@@ -459,8 +497,7 @@ const UploadedFilesSidebar = ({ isOpen, onClose, selectedCollection, currentBatc
 
   // Derive grouped/sorted batches for display: processing first, then queued by position
   const allBatches = Object.values(activeBatches || {});
-  const processingBatches = allBatches.filter(b => b && (b.queueStatus === 'processing' || b.queueStatus === 'started' || b.status === 'started' || b.status === 'processing' || b.queueStatus === 'completed'));
-  const dequeuedBatches = allBatches.filter(b => b && b.queueStatus === 'dequeued');
+  const processingBatches = allBatches.filter(b => b && (b.queueStatus === 'processing' || b.queueStatus === 'started' || b.status === 'started' || b.status === 'processing'));
   const queuedBatches = allBatches.filter(b => b && b.queueStatus === 'queued');
   queuedBatches.sort((a, b) => {
     const pa = (typeof a.queuePosition === 'number') ? a.queuePosition : Infinity;
@@ -468,12 +505,15 @@ const UploadedFilesSidebar = ({ isOpen, onClose, selectedCollection, currentBatc
     return pa - pb;
   });
 
+  // Total files across processing and queued batches (used for a compact summary)
+  const totalFilesCount = (processingBatches || []).reduce((sum, b) => sum + (b.fileCount || 0), 0) + (queuedBatches || []).reduce((sum, b) => sum + (b.fileCount || 0), 0);
+
   return (
     <>
       {isOpen && <div className="fixed inset-0 bg-black/50 sm:hidden" onClick={onClose} />}
       <div className={`fixed top-0 right-0 h-full w-full sm:w-96 max-w-full bg-white dark:bg-gray-800 dark:text-white shadow-lg p-4 z-50 overflow-y-auto ${!isOpen ? 'hidden' : ''}`}>
         <div className="flex justify-between items-center mb-4">
-          <h2 className="text-xl font-bold dark:text-white">Uploaded Files</h2>
+          <h2 className="text-xl font-bold dark:text-white">Batch Processing Status</h2>
           <button onClick={onClose} className="text-gray-500 hover:text-gray-700 dark:text-gray-300 dark:hover:text-white">
             <svg
               xmlns="http://www.w3.org/2000/svg"
@@ -497,7 +537,10 @@ const UploadedFilesSidebar = ({ isOpen, onClose, selectedCollection, currentBatc
           {(getActiveBatchCount() > 0 || (currentBatch > 0 && totalBatches > 0)) && (
             <div className="mb-4 p-3 rounded-md bg-blue-50 dark:bg-blue-900/20">
               <div className="flex items-center justify-between mb-2">
-                <h3 className="font-semibold text-sm dark:text-slate-100">Processing ({processingBatches.length}) • Queued ({queuedBatches.length})</h3>
+                <h3 className="font-semibold text-sm dark:text-slate-100">
+                  Processing ({processingBatches.length}) • Queued ({queuedBatches.length})
+                  <span className="text-xs text-gray-500 ml-2">({totalFilesCount} files total)</span>
+                </h3>
                 {(currentBatch > 0 && totalBatches > 0) && (
                   <div className="text-xs text-blue-700 dark:text-slate-300">Batch {currentBatch} of {totalBatches} processing…</div>
                 )}
@@ -515,8 +558,11 @@ const UploadedFilesSidebar = ({ isOpen, onClose, selectedCollection, currentBatc
                             <div className="flex items-center space-x-3">
                               <div className={`w-3 h-3 rounded-full ${isCompleted ? 'bg-green-500' : 'animate-pulse bg-blue-500'}`} />
                               <div>
-                                <div className="text-sm font-medium dark:text-slate-100">{batch.message}</div>
-                                <div className="text-xs text-gray-500 dark:text-slate-300">{batch.fileCount} files {batch.startTime ? `• ${formatElapsedTime(batch.startTime)} ago` : ''}</div>
+                                <div className="text-sm font-medium dark:text-slate-100">Batch: Processing ({batch.fileCount || 0} files)</div>
+                                {batch.message && (
+                                  <div className="text-xs text-gray-500 dark:text-slate-300">{batch.message}</div>
+                                )}
+                                <div className="text-xs text-gray-500 dark:text-slate-300">{batch.startTime ? `• ${formatElapsedTime(batch.startTime)} ago` : ''}</div>
                               </div>
                             </div>
                             <div>
@@ -549,26 +595,7 @@ const UploadedFilesSidebar = ({ isOpen, onClose, selectedCollection, currentBatc
                   </>
                 )}
 
-                {/* Dequeued transient group (short-lived) */}
-                {dequeuedBatches.length > 0 && (
-                  <>
-                    <div className="mt-2 mb-2 text-sm font-medium dark:text-slate-100">Dequeued ({dequeuedBatches.length})</div>
-                    {dequeuedBatches.map(batch => (
-                      <div key={batch.batchId} className="flex flex-col p-2 bg-yellow-50 dark:bg-yellow-900/10 rounded shadow-sm">
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center space-x-3">
-                            <div className="text-amber-500">⚠️</div>
-                            <div>
-                              <div className="text-sm font-medium dark:text-slate-100">{batch.message || 'Batch dequeued'}</div>
-                              <div className="text-xs text-gray-500 dark:text-slate-300">{batch.fileCount} files • dequeued {formatElapsedTime(batch.lastUpdate)} ago</div>
-                            </div>
-                          </div>
-                          <div className="text-xs text-amber-700 dark:text-amber-300"><span className="px-2 py-1 text-xs font-semibold rounded-full text-amber-700 bg-amber-100 dark:text-amber-200 dark:bg-amber-900/20">Dequeued</span></div>
-                        </div>
-                      </div>
-                    ))}
-                  </>
-                )}
+                {/* Note: dequeued batches intentionally not shown; dequeued is treated as part of queued->processing transition */}
 
                 {/* Queued batches next, sorted by queuePosition */}
                 {queuedBatches.length > 0 && (
@@ -580,16 +607,17 @@ const UploadedFilesSidebar = ({ isOpen, onClose, selectedCollection, currentBatc
                           <div className="flex items-center space-x-3">
                             <div className="text-amber-500">⏳</div>
                             <div>
-                              <div className="text-sm font-medium dark:text-slate-100">{batch.message}</div>
-                              <div className="text-xs text-gray-500 dark:text-slate-300">
-                                {typeof batch.queuePosition === 'number' ? (
-                                  <span className="font-semibold">Queued (position {batch.queuePosition}{batch.totalQueued ? ` of ${batch.totalQueued}` : ''})</span>
-                                ) : (
-                                  <span className="font-semibold">Queued (position ?)</span>
-                                )}
-                                {(batch.estimatedWaitTime !== null && batch.estimatedWaitTime !== undefined) ? ` • ${formatWaitTime(batch.estimatedWaitTime)} wait` : ''}
-                                {batch.enqueuedAt ? ` • queued ${formatElapsedTime(batch.enqueuedAt)} ago` : ''}
+                              <div className="text-sm font-medium dark:text-slate-100">
+                                {(() => {
+                                  const pos = (typeof batch.queuePosition === 'number') ? `${batch.queuePosition}${batch.totalQueued ? ` of ${batch.totalQueued}` : ''}` : '?';
+                                  const eta = (batch.estimatedWaitTime !== null && batch.estimatedWaitTime !== undefined) ? `, ${formatWaitTime(batch.estimatedWaitTime)} wait` : '';
+                                  return `Batch: Queued (position ${pos}${eta})`;
+                                })()}
                               </div>
+                              {batch.message && (
+                                <div className="text-xs text-gray-500 dark:text-slate-300">{batch.message}</div>
+                              )}
+                              <div className="text-xs text-gray-500 dark:text-slate-300">{batch.enqueuedAt ? `• queued ${formatElapsedTime(batch.enqueuedAt)} ago` : ''}</div>
                             </div>
                           </div>
                           <div className="text-xs text-amber-700 dark:text-amber-300"><span className="px-2 py-1 text-xs font-semibold rounded-full text-amber-700 bg-amber-100 dark:text-amber-200 dark:bg-amber-900/20">Queued</span></div>
@@ -606,65 +634,28 @@ const UploadedFilesSidebar = ({ isOpen, onClose, selectedCollection, currentBatc
           {/* Recent Batch Messages */}
           {batchMessages.length > 0 && (
             <div className="mb-4 p-2">
-              {batchMessages.slice(0, 5).map((m) => (
-                <div key={m.ts} className={`flex items-start justify-between p-2 mb-2 rounded ${m.type === 'success' ? 'bg-green-50 dark:bg-green-900/20 dark:border-green-800 dark:text-green-300' : m.type === 'error' ? 'bg-red-50 dark:bg-red-900/20 dark:border-red-800 dark:text-red-400' : 'bg-blue-50 dark:bg-blue-900/20 dark:border-blue-800 dark:text-blue-200'}`}>
+              {batchMessages.map((m) => (
+                <div key={m.batchId ?? m.ts} className={`flex items-start justify-between p-2 mb-2 rounded ${m.type === 'success' ? 'bg-green-50 dark:bg-green-900/20 dark:border-green-800 dark:text-green-300' : m.type === 'error' ? 'bg-red-50 dark:bg-red-900/20 dark:border-red-800 dark:text-red-400' : 'bg-blue-50 dark:bg-blue-900/20 dark:border-blue-800 dark:text-blue-200'}`}>
                   <div>
                     <div className="text-sm">{m.text}</div>
                     <div className="text-xs text-gray-500 dark:text-slate-300">{new Date(m.ts).toLocaleTimeString()}</div>
                   </div>
                   <div>
-                    <button onClick={() => dismissMessage(m.ts)} className="text-gray-400 hover:text-gray-600 dark:text-gray-400 dark:hover:text-gray-200">x</button>
+                    <button onClick={() => dismissMessage(m.batchId ?? m.ts)} className="text-gray-400 hover:text-gray-600 dark:text-gray-400 dark:hover:text-gray-200">x</button>
                   </div>
                 </div>
               ))}
             </div>
           )}
 
-          {isOpen && loading && <FileCardSkeleton count={5} />}
-
-          {files.map((file) => {
-            const safeStatus = (file.processing_status || '').trim();
-            return (
-            <div key={file.id} className="border rounded-lg p-4 bg-gray-50 dark:bg-gray-800 dark:border-gray-600 text-gray-900 dark:text-white">
-              <div className="flex justify-between items-center">
-                <div>
-                  <p className="font-semibold">{file.original_filename}</p>
-                  <p className="text-sm text-gray-500 dark:text-gray-400">
-                    {new Date(file.created_at).toLocaleString()} &nbsp; {(file.file_size / 1024).toFixed(2)} KB
-                  </p>
-                </div>
-                <div className="flex items-center space-x-2">
-                  {/* <button onClick={() => handleDownload(file)} title="Download" className="text-gray-500 hover:text-gray-700">
-                    📄
-                  </button>
-                  {file.processing_status === 'failed' && (
-                    <button onClick={() => handleReprocess(file.id)} title="Reprocess" className="text-gray-500 hover:text-gray-700">
-                      🔄
-                    </button>
-                  )} */}
-                  <span
-                    className={`px-2 py-1 text-xs font-semibold rounded-full ${
-                      safeStatus === 'completed'
-                        ? 'text-green-800 bg-green-200 dark:text-green-200 dark:bg-green-900/20'
-                        : safeStatus === 'processing'
-                        ? 'text-yellow-800 bg-yellow-200 dark:text-yellow-300 dark:bg-yellow-900/40'
-                        : 'text-red-800 bg-red-200 dark:text-red-200 dark:bg-red-900/20'
-                    }`}
-                  >
-                    {safeStatus}
-                  </span>
-                </div>
-              </div>
-              {(safeStatus === 'processing' && typeof file.upload_progress === 'number') && (
-                <div className="mt-2">
-                  <ProgressBar progress={file.upload_progress} />
-                </div>
-              )}
+          {isOpen && loading && (
+            <div className="p-2">
+              <div className="text-sm text-gray-500 dark:text-gray-400">Loading batch status…</div>
             </div>
-          )})}
+          )}
 
-          {(!loading && (!files || files.length === 0)) && (
-            <EmptyState icon="📄" title="No files uploaded yet" description="Upload PDF files to see them here" />
+          {(!loading && (!files || files.length === 0) && getActiveBatchCount() === 0) && (
+            <EmptyState icon="📄" title="No active batches" description="Upload files to see batch processing status" />
           )}
         </div>
       </div>

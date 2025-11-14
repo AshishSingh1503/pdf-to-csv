@@ -25,10 +25,26 @@ if (_maxConcurrentBatches > 20) {
 
 let _batchQueueTimeout = parseInt(process.env.BATCH_QUEUE_TIMEOUT, 10);
 if (isNaN(_batchQueueTimeout) || _batchQueueTimeout < 60000) {
-  // Increase default batch processing timeout to 15 minutes to accommodate larger/slow Document AI workloads.
-  // Previously defaulted to 5 minutes which caused timeout failures for large batches.
-  _batchQueueTimeout = 900000; // default 15 minutes
-  if (process.env.BATCH_QUEUE_TIMEOUT) logger.warn('BATCH_QUEUE_TIMEOUT too low; using default 900000');
+  // Increase default batch processing timeout to 30 minutes to accommodate larger/slow Document AI workloads.
+  // Previously defaulted to 15 minutes; larger workloads may require more time.
+  _batchQueueTimeout = 1800000; // default 30 minutes
+  if (process.env.BATCH_QUEUE_TIMEOUT) logger.warn('BATCH_QUEUE_TIMEOUT too low; using default 1800000');
+}
+
+// Optional multiplier to scale the batch queue timeout without code changes
+let _batchQueueTimeoutMultiplier = parseFloat(process.env.BATCH_QUEUE_TIMEOUT_MULTIPLIER);
+if (!isNaN(_batchQueueTimeoutMultiplier)) {
+  // Clamp multiplier to reasonable bounds
+  if (_batchQueueTimeoutMultiplier < 0.5) {
+    logger.warn('BATCH_QUEUE_TIMEOUT_MULTIPLIER too small; clamping to 0.5');
+    _batchQueueTimeoutMultiplier = 0.5;
+  }
+  if (_batchQueueTimeoutMultiplier > 5.0) {
+    logger.warn('BATCH_QUEUE_TIMEOUT_MULTIPLIER too large; clamping to 5.0');
+    _batchQueueTimeoutMultiplier = 5.0;
+  }
+  _batchQueueTimeout = Math.round(_batchQueueTimeout * _batchQueueTimeoutMultiplier);
+  logger.info(`Applied BATCH_QUEUE_TIMEOUT_MULTIPLIER=${_batchQueueTimeoutMultiplier}; effective BATCH_QUEUE_TIMEOUT=${_batchQueueTimeout}`);
 }
 
 const _enableQueueLogging = (process.env.ENABLE_QUEUE_LOGGING === 'true');
