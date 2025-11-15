@@ -57,7 +57,7 @@ const Home = () => {
   // - Sidebar shows real-time processing status via WebSocket (queue position, progress, completion)
   // - Toast notifications only for: upload completion summary and actionable errors
   // - Let sidebar be the primary source of truth for processing status
-  const BATCH_SIZE = 25; // limit per upload batch
+  const BATCH_SIZE = 10; // limit per upload batch
     const fileChunks = [];
     for (let i = 0; i < newFiles.length; i += BATCH_SIZE) {
       fileChunks.push(newFiles.slice(i, i + BATCH_SIZE));
@@ -412,7 +412,7 @@ const Home = () => {
                 <ProgressBar
                   progress={uploadProgress}
                   showPercentage={true}
-                  label={currentBatch > 0 ? `Batch ${currentBatch} of ${totalBatches}` : 'Uploading'}
+                  label={currentBatch > 0 ? `Batch ${currentBatch} of ${totalBatches}` : 'processing'}
                   estimatedTimeRemaining={uploadStartTime && currentBatch > 0 ? Math.round(((Date.now() - uploadStartTime) / currentBatch) * (totalBatches - currentBatch) / 1000) : null}
                 />
               </div>

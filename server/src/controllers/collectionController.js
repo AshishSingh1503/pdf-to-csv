@@ -7,10 +7,10 @@ const { KEYS } = cache;
 // Get all collections
 export const getAllCollections = async (req, res) => {
   try {
-    const { customerId } = req.query;
-    const cacheKey = KEYS.COLLECTIONS_ALL(customerId);
+    const { customerId, status } = req.query;
+    const cacheKey = KEYS.COLLECTIONS_ALL(customerId, status);
     const collections = await cache.getOrSet(cacheKey, async () => {
-      return await Collection.findAll(customerId);
+      return await Collection.findAll(customerId, status);
     });
     res.json({ success: true, data: collections });
   } catch (error) {
@@ -66,7 +66,9 @@ export const createCollection = async (req, res) => {
         customer_id,
       });
     // invalidate relevant caches
-    cache.del(KEYS.COLLECTIONS_ALL(customer_id));
+    cache.del(KEYS.COLLECTIONS_ALL(customer_id, 'active'));
+    cache.del(KEYS.COLLECTIONS_ALL(customer_id, 'archived'));
+    cache.del(KEYS.COLLECTIONS_ALL(customer_id, 'all'));
     // also clear global aggregated list to avoid stale global views
     cache.del(KEYS.COLLECTIONS_ALL_GLOBAL);
       res.status(201).json({ success: true, data: collection });
@@ -115,7 +117,9 @@ export const updateCollection = async (req, res) => {
     // invalidate caches for this collection and for the list
   cache.del(KEYS.COLLECTION_BY_ID(id));
   cache.del(KEYS.COLLECTION_STATS(id));
-  cache.del(KEYS.COLLECTIONS_ALL(collection.customer_id));
+  cache.del(KEYS.COLLECTIONS_ALL(collection.customer_id, 'active'));
+  cache.del(KEYS.COLLECTIONS_ALL(collection.customer_id, 'archived'));
+  cache.del(KEYS.COLLECTIONS_ALL(collection.customer_id, 'all'));
   cache.del(KEYS.COLLECTIONS_ALL_GLOBAL);
     res.json({ success: true, data: updatedCollection });
   } catch (error) {
@@ -140,12 +144,41 @@ export const archiveCollection = async (req, res) => {
     }
   cache.del(KEYS.COLLECTION_BY_ID(id));
   cache.del(KEYS.COLLECTION_STATS(id));
-  cache.del(KEYS.COLLECTIONS_ALL(collection.customer_id));
+  cache.del(KEYS.COLLECTIONS_ALL(collection.customer_id, 'active'));
+  cache.del(KEYS.COLLECTIONS_ALL(collection.customer_id, 'archived'));
+  cache.del(KEYS.COLLECTIONS_ALL(collection.customer_id, 'all'));
   cache.del(KEYS.COLLECTIONS_ALL_GLOBAL);
     res.json({ success: true, data: archivedCollection });
   } catch (error) {
     logger.error('Error archiving collection', { error: error?.message, stack: error?.stack });
     res.status(500).json({ success: false, error: 'Failed to archive collection' });
+  }
+};
+
+// Unarchive collection
+export const unarchiveCollection = async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    const collection = await Collection.findById(id, 'archived'); // Find in archived
+    if (!collection) {
+      return res.status(404).json({ success: false, error: 'Archived collection not found' });
+    }
+    
+    const unarchivedCollection = await collection.unarchive();
+    if (!unarchivedCollection) {
+      return res.status(500).json({ success: false, error: 'Failed to unarchive collection' });
+    }
+  cache.del(KEYS.COLLECTION_BY_ID(id));
+  cache.del(KEYS.COLLECTION_STATS(id));
+  cache.del(KEYS.COLLECTIONS_ALL(collection.customer_id, 'active'));
+  cache.del(KEYS.COLLECTIONS_ALL(collection.customer_id, 'archived'));
+  cache.del(KEYS.COLLECTIONS_ALL(collection.customer_id, 'all'));
+  cache.del(KEYS.COLLECTIONS_ALL_GLOBAL);
+    res.json({ success: true, data: unarchivedCollection });
+  } catch (error) {
+    logger.error('Error unarchiving collection', { error: error?.message, stack: error?.stack });
+    res.status(500).json({ success: false, error: 'Failed to unarchive collection' });
   }
 };
 
@@ -165,7 +198,9 @@ export const deleteCollection = async (req, res) => {
     }
   cache.del(KEYS.COLLECTION_BY_ID(id));
   cache.del(KEYS.COLLECTION_STATS(id));
-  cache.del(KEYS.COLLECTIONS_ALL(collection.customer_id));
+  cache.del(KEYS.COLLECTIONS_ALL(collection.customer_id, 'active'));
+  cache.del(KEYS.COLLECTIONS_ALL(collection.customer_id, 'archived'));
+  cache.del(KEYS.COLLECTIONS_ALL(collection.customer_id, 'all'));
   cache.del(KEYS.COLLECTIONS_ALL_GLOBAL);
     res.json({ success: true, message: 'Collection deleted successfully' });
   } catch (error) {

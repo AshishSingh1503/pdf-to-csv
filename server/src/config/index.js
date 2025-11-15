@@ -123,7 +123,7 @@ export const config = {
   gracefulShutdownTimeout: _gracefulShutdownTimeout,
   
   // Cloud Storage configuration
-  inputBucket: process.env.INPUT_BUCKET || "pdf-data-extraction-input-bucket",
   outputBucket: process.env.OUTPUT_BUCKET || "pdf-data-extraction-output-bucket",
   storageLocation: process.env.STORAGE_LOCATION || "us",
+  deleteRawAfterProcess: process.env.DELETE_RAW_AFTER_PROCESS === 'true',
 };

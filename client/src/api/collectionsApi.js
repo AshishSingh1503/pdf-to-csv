@@ -5,9 +5,10 @@ const BASE_URL = import.meta.env.VITE_API_URL ? `${import.meta.env.VITE_API_URL}
 // Collections API
 export const collectionsApi = {
   // Get all collections
-  getAll: async (customerId = null) => {
+  getAll: async (customerId = null, status = 'active') => {
     const params = new URLSearchParams();
     if (customerId) params.append('customerId', customerId);
+    if (status) params.append('status', status);
     const { data } = await axios.get(`${BASE_URL}/collections`, { params });
     return data;
   },
@@ -33,6 +34,12 @@ export const collectionsApi = {
   // Archive collection
   archive: async (id) => {
     const { data } = await axios.patch(`${BASE_URL}/collections/${id}/archive`);
+    return data;
+  },
+
+  // Unarchive collection
+  unarchive: async (id) => {
+    const { data } = await axios.patch(`${BASE_URL}/collections/${id}/unarchive`);
     return data;
   },
 

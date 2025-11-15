@@ -233,16 +233,42 @@ export const processDocuments = async (req, res) => {
       logger.warn('Failed to check queue capacity; proceeding with enqueue', e && e.message);
     }
 
-    const fileMetadataPromises = fileArray.map(file => {
-      return FileMetadata.create({
+    // Step 1: Create initial metadata records
+    const initialMetadataPromises = fileArray.map(file => 
+      FileMetadata.create({
         collection_id: collectionIdNum,
         original_filename: file.name,
         file_size: file.size,
-        processing_status: 'processing',
+        processing_status: 'uploading', // Start with 'uploading' status
         batch_id: batchId,
-      });
+      })
+    );
+    const fileMetadatas = await Promise.all(initialMetadataPromises);
+
+    // Step 2: Upload raw files to GCS and update metadata with the raw path
+    const uploadAndUpdatePromises = fileMetadatas.map(async (metadata, index) => {
+      const file = fileArray[index];
+      try {
+        const rawGcsPath = await CloudStorageService.uploadRawFile(file, collectionIdNum, batchId);
+        // This is a bit inefficient (N+1 updates), but necessary to associate path with record.
+        // Could be optimized with a bulk update if the model supported it.
+        await metadata.updateCloudStoragePathRaw(rawGcsPath);
+        await metadata.updateStatus('processing'); // Now ready for processing
+        return metadata;
+      } catch (uploadError) {
+        logger.error(`Failed to upload raw file ${file.name} for batch ${batchId}.`, uploadError);
+        await metadata.updateStatus('failed'); // Mark as failed if upload fails
+        return null; // Indicates failure
+      }
     });
-    const fileMetadatas = await Promise.all(fileMetadataPromises);
+
+    const updatedMetadatas = (await Promise.all(uploadAndUpdatePromises)).filter(Boolean);
+
+    // If all uploads failed, we can't proceed.
+    if (updatedMetadatas.length === 0) {
+      logger.error(`All file uploads failed for batch ${batchId}. Aborting enqueue.`);
+      return res.status(500).json({ success: false, error: 'All file uploads failed. Cannot process batch.' });
+    }
 
     // Enqueue the batch for processing via BatchQueueManager
     // Use the shared processor wrapper that adapts our processor to the queue manager
@@ -337,7 +363,27 @@ export const processDocuments = async (req, res) => {
 const processPDFFilesParallel = async (fileArray, collectionIdNum, fileMetadatas, batchId = null, startedAt = null) => {
   let progressInterval = null;
   try {
-  logger.info(`Starting parallel processing for ${fileArray.length} files...`);
+    // Download raw files from GCS to a temporary local directory
+    const filesToProcess = [];
+    for (const meta of fileMetadatas) {
+        try {
+            const tempPath = await CloudStorageService.downloadFile(meta.cloud_storage_path_raw);
+            // Attach temporary info directly to the class instance to preserve its methods
+            meta.tempPath = tempPath;
+            meta.name = meta.original_filename;
+            meta.mv = (newPath) => fs.promises.rename(tempPath, newPath);
+            filesToProcess.push(meta);
+        } catch (downloadError) {
+            logger.error(`Failed to download raw file ${meta.original_filename} from ${meta.cloud_storage_path_raw}`, downloadError);
+            await meta.updateStatus('failed');
+        }
+    }
+    if (filesToProcess.length === 0) {
+      logger.error(`Batch ${batchId} aborted: all raw file downloads failed.`);
+      return; // All downloads failed, nothing to process
+    }
+
+    logger.info(`Starting parallel processing for ${filesToProcess.length} files...`);
 
     // Emit initial batch progress and start heartbeat
     try {
@@ -390,11 +436,11 @@ const processPDFFilesParallel = async (fileArray, collectionIdNum, fileMetadatas
     progressInterval = setTimeout(runHeartbeat, HEARTBEAT_INTERVAL);
 
     // STEP 1: Process ALL files at once with high concurrency
-    const { allRawRecords, allFilteredRecords, allRemovedRecords } = 
-      await processPDFs(fileArray, 10, 4);
+    const { allRawRecords, allFilteredRecords, allRemovedRecords, allPreProcessingJson, allPostProcessingJson } =
+        await processPDFs(filesToProcess, 10, 4);
 
     const processingTimestamp = new Date().toISOString();
-
+    
     // ⭐ OPTIMIZATION: Prepare ALL records at once
    const allPreProcessRecords = allRawRecords.map((record) => ({  
      collection_id: collectionIdNum,  
@@ -455,11 +501,61 @@ const processPDFFilesParallel = async (fileArray, collectionIdNum, fileMetadatas
       return totalInserted;
     };
 
-    const insertedPreCount = await chunkAndInsert(PreProcessRecord, allPreProcessRecords, 'pre-process');
-    const insertedPostCount = await chunkAndInsert(PostProcessRecord, allPostProcessRecords, 'post-process');
-    const insertedRemovedCount = await chunkAndInsert(RemovedRecord, allRemovedRecordsForDB, 'removed');
+    try {
+        const insertedPreCount = await chunkAndInsert(PreProcessRecord, allPreProcessRecords, 'pre-process');
+        const insertedPostCount = await chunkAndInsert(PostProcessRecord, allPostProcessRecords, 'post-process');
+        const insertedRemovedCount = await chunkAndInsert(RemovedRecord, allRemovedRecordsForDB, 'removed');
+        logger.info(`Inserted total: ${insertedPreCount} pre, ${insertedPostCount} post, ${insertedRemovedCount} removed records`);
+    } catch (dbError) {
+        logger.error('Database insert failed for batch.', dbError);
+        for (const meta of fileMetadatas) {
+            await meta.updateStatus('error_db_insert');
+        }
+        // Broadcast a failure event
+        broadcast({ type: 'BATCH_PROCESSING_FAILED', batchId, collectionId: collectionIdNum, error: 'Database insert failed' });
+        return; // Stop further processing for this batch
+    }
 
-    logger.info(`Inserted total: ${insertedPreCount} pre, ${insertedPostCount} post, ${insertedRemovedCount} removed records`);
+
+    // After successful DB inserts, proceed with uploading processed files and deleting raw files.
+    for (const meta of filesToProcess) {
+        try {
+            const preJson = allPreProcessingJson.find(j => j.file_name === meta.original_filename);
+            const postJson = allPostProcessingJson.find(j => j.file_name === meta.original_filename);
+
+            const processedFiles = [];
+            if (preJson) {
+              processedFiles.push({ name: `${meta.original_filename}.pre-processing.json`, content: JSON.stringify(preJson, null, 2), contentType: 'application/json' });
+            }
+            if (postJson) {
+              processedFiles.push({ name: `${meta.original_filename}.post-processing.json`, content: JSON.stringify(postJson, null, 2), contentType: 'application/json' });
+            }
+
+            if (processedFiles.length > 0) {
+              const processedGcsPaths = await CloudStorageService.uploadProcessedFiles(processedFiles, meta.collection_id, meta.batch_id);
+              const processedDir = path.dirname(processedGcsPaths[0]);
+              await meta.updateCloudStoragePathProcessed(processedDir);
+            }
+
+            // Now that DB and processed file uploads are successful, conditionally delete the raw file.
+            if (config.deleteRawAfterProcess) {
+                try {
+                    await CloudStorageService.deleteFile(meta.cloud_storage_path_raw);
+                    logger.info(`Successfully deleted raw PDF: ${meta.cloud_storage_path_raw}`);
+                    // Nullify the path in the database after successful deletion
+                    await meta.updateCloudStoragePathRaw(null);
+                } catch (deleteError) {
+                    logger.error(`Failed to delete raw PDF ${meta.cloud_storage_path_raw}. Please check GCS permissions.`, deleteError);
+                    await meta.updateStatus('error_delete');
+                }
+            }
+            await meta.updateStatus('completed');
+        } catch (postProcessError) {
+            logger.error(`Error during post-processing for file ${meta.original_filename}`, postProcessError);
+            await meta.updateStatus('error_processed_upload');
+        }
+    }
+
 
     // Broadcast DB insert milestone
     try {
@@ -467,129 +563,6 @@ const processPDFFilesParallel = async (fileArray, collectionIdNum, fileMetadatas
       broadcast({ type: 'BATCH_PROCESSING_PROGRESS', batchId, collectionId: collectionIdNum, status: 'database_insert_complete', message: 'Records inserted into database', progress: 33, startedAt });
     } catch (e) {
       logger.warn('Unable to broadcast database insert milestone:', e && e.message);
-    }
-
-    // NOTE: Defer marking files as 'completed' until after each successful upload
-    // This prevents temporary 'completed' state before uploads finish.
-
-    // STEP 3: Upload files to cloud in parallel
-    const uploadPromises = fileArray.map(async (file, idx) => {
-      try {
-        const uploadedFiles = await CloudStorageService.uploadProcessedFiles([file], collectionIdNum);
-        // uploadedFiles may be an array (common) or an object. Guard both shapes.
-        if (fileMetadatas[idx]) {
-          let uploadedUrl = null;
-          if (Array.isArray(uploadedFiles) && uploadedFiles.length > 0 && uploadedFiles[0] && uploadedFiles[0].url) {
-            uploadedUrl = uploadedFiles[0].url;
-          } else if (uploadedFiles && typeof uploadedFiles === 'object' && uploadedFiles.url) {
-            uploadedUrl = uploadedFiles.url;
-          }
-
-          const ok = !!uploadedUrl;
-          if (ok) {
-            await fileMetadatas[idx].updateCloudStoragePath(uploadedUrl);
-            // mark this file as completed now that upload succeeded
-            try {
-              await fileMetadatas[idx].updateStatus('completed');
-              return uploadedFiles;
-            } catch (statusErr) {
-              // If we fail to mark as completed, consider this file failed so it doesn't stay 'processing'
-              logger.warn('Failed to update file status to completed for', fileMetadatas[idx].id, statusErr && statusErr.message);
-              try {
-                await fileMetadatas[idx].updateStatus('failed');
-              } catch (failedErr) {
-                logger.error('Also failed to mark file as failed for', fileMetadatas[idx].id, failedErr && failedErr.message);
-              }
-              return null;
-            }
-          } else {
-            // Treat missing URL as a failed upload. Do not update DB here; let the centralized handler mark failed files
-            return null;
-          }
-        }
-      } catch (err) {
-        logger.error(`Error uploading file ${file.name}:`, err);
-        return null;
-      }
-    });
-
-    const uploadResults = await Promise.all(uploadPromises);
-    const succeededCount = uploadResults.filter(r => r).length;
-  logger.info(`Uploaded ${succeededCount} files to cloud`);
-
-    // If any upload failed, mark files as failed and emit batch failure
-    const anyUploadFailed = uploadResults.some(r => !r);
-    if (anyUploadFailed) {
-  logger.error('One or more uploads failed for this batch. Marking failed files only.');
-
-      // Determine which indices failed
-      const failedIndices = uploadResults.map((r, i) => (!r ? i : -1)).filter(i => i >= 0);
-
-      // Update only failed file metadata to 'failed' (skip if already failed)
-      const failedUpdatePromises = failedIndices.map(async (idx) => {
-        const metadata = fileMetadatas[idx];
-        if (!metadata) return null;
-        try {
-          const latest = await FileMetadata.findById(metadata.id);
-          if (!latest) return null;
-          if ((latest.processing_status || '').toLowerCase() === 'failed') return latest;
-          // mark as failed
-          return await latest.updateStatus('failed');
-        } catch (err) {
-      logger.error('Error marking metadata as failed for index', idx, err);
-          return null;
-        }
-      });
-      const updatedFailedMetadatas = await Promise.all(failedUpdatePromises);
-
-      // Refresh current metadata states (mix of completed and failed)
-      const currentMetadatas = await Promise.all(fileMetadatas.map(async (m) => {
-        try { return await FileMetadata.findById(m.id); } catch (e) { return m; }
-      }));
-
-      // Ensure no file is still in 'processing' state - convert to failed if found
-      for (let i = 0; i < currentMetadatas.length; i++) {
-        const cm = currentMetadatas[i];
-        if (!cm) continue;
-        if ((cm.processing_status || '').toLowerCase() === 'processing') {
-          try {
-            currentMetadatas[i] = await cm.updateStatus('failed');
-          } catch (e) {
-            logger.warn('Failed to flip processing->failed for', cm.id, e && e.message);
-          }
-        }
-      }
-
-      // Broadcast failure milestone with partial flag
-      try {
-        broadcast({ type: 'BATCH_PROCESSING_FAILED', batchId, collectionId: collectionIdNum, fileCount: fileMetadatas.length, error: 'One or more uploads failed', partial: true, files: currentMetadatas, startedAt });
-      } catch (e) {
-        logger.warn('Unable to broadcast cloud upload failure milestone:', e && e.message);
-      }
-
-      // Emit FILES_PROCESSED for each file with its current metadata so UI can update individual statuses
-      try {
-        const failureBroadcasts = (currentMetadatas || []).map(async (metadata) => {
-          if (!metadata) return null;
-          const cid = metadata.collection_id || metadata.collectionId || collectionIdNum;
-          const camel = normalizeMetadata(metadata);
-          // include both camelCase and snake_case for backward compatibility
-          broadcast({ type: 'FILES_PROCESSED', batchId, collectionId: cid, fileMetadata: camel, file_metadata: metadata });
-        });
-        await Promise.all(failureBroadcasts);
-      } catch (e) {
-        logger.warn('Unable to broadcast individual file statuses after partial failure:', e && e.message);
-      }
-
-      return;
-    }
-
-    // Broadcast cloud upload milestone
-    try {
-      // milestone: cloud upload ~66%
-      broadcast({ type: 'BATCH_PROCESSING_PROGRESS', batchId, collectionId: collectionIdNum, status: 'cloud_upload_complete', message: 'Files uploaded to cloud storage', progress: 66, startedAt });
-    } catch (e) {
-      logger.warn('Unable to broadcast cloud upload milestone:', e && e.message);
     }
 
     // STEP 4: Broadcast completion
@@ -755,94 +728,113 @@ export const updateUploadProgress = async (req, res) => {
   }
 };
 
+const reprocessLocks = new Set();
+
 export const reprocessFile = async (req, res) => {
+  const { fileId } = req.params;
+  
+  if (reprocessLocks.has(fileId)) {
+    return res.status(409).json({ error: 'Reprocessing for this file is already in progress.' });
+  }
+
   try {
-    const { fileId } = req.params;
+    reprocessLocks.add(fileId);
+
     const fileMetadata = await FileMetadata.findById(fileId);
     if (!fileMetadata) {
       return res.status(404).json({ error: 'File not found' });
     }
 
-    const tempPath = await CloudStorageService.downloadFile(fileMetadata.cloud_storage_path);
+    if (!fileMetadata.cloud_storage_path_raw) {
+        return res.status(409).json({ error: 'Raw PDF path not found - cannot reprocess.' });
+    }
+
+    const rawFileExists = await CloudStorageService.fileExists(fileMetadata.cloud_storage_path_raw);
+    if (!rawFileExists) {
+      return res.status(409).json({ error: 'Raw PDF deleted - cannot reprocess.' });
+    }
+    
+    await fileMetadata.updateStatus('reprocessing');
+    broadcast({ type: 'FILE_REPROCESSING_STARTED', fileId: fileMetadata.id, collectionId: fileMetadata.collection_id });
+
+
+    const tempPath = await CloudStorageService.downloadFile(fileMetadata.cloud_storage_path_raw);
     const file = {
       name: fileMetadata.original_filename,
-      mv: async (path) => {
-        fs.renameSync(tempPath, path);
-      },
+      mv: async (path) => fs.promises.rename(tempPath, path),
     };
 
     const {
       allRawRecords,
       allFilteredRecords,
-      allRemovedRecords
+      allRemovedRecords,
+      allPreProcessingJson,
+      allPostProcessingJson
     } = await processPDFs([file]);
 
+    // Clear old data
     await PreProcessRecord.deleteByFileName(fileMetadata.original_filename);
     await PostProcessRecord.deleteByFileName(fileMetadata.original_filename);
     await RemovedRecord.deleteByFileName(fileMetadata.original_filename);
 
     const processingTimestamp = new Date().toISOString();
+    const collectionIdNum = fileMetadata.collection_id;
 
-   const preProcessRecords = allRawRecords.map(record => ({  
-     collection_id: fileMetadata.collection_id,  
-     full_name: `${record.first_name || ''} ${record.last_name || ''}`.trim(),  
-     mobile: record.mobile,  
-     email: record.email,  
-     address: record.address,  
-     dateofbirth: record.dateofbirth,  
-     landline: record.landline,  
-     lastseen: record.lastseen,  
-     file_name: record.file_name,  
-     processing_timestamp: processingTimestamp,  
-   }));
-
-    const postProcessRecords = allFilteredRecords.map(record => ({
-      collection_id: fileMetadata.collection_id,
-      ...record,
-      full_name: `${record.first_name || ''} ${record.last_name || ''}`.trim(),
-      processing_timestamp: processingTimestamp,
+    // Insert new data (logic copied and adapted from main processing flow)
+    const allPreProcessRecords = allRawRecords.map((record) => ({
+        collection_id: collectionIdNum,
+        full_name: `${record.first_name || ''} ${record.last_name || ''}`.trim(),
+        ...record,
+        processing_timestamp: processingTimestamp
     }));
 
-    const removedRecords = (allRemovedRecords || []).map(record => ({
-      collection_id: fileMetadata.collection_id,
-      full_name: record.full_name,
-      file_name: record.file_name,
-      rejection_reason: record.rejection_reason,
-      processing_timestamp: processingTimestamp,
+    const allPostProcessRecords = allFilteredRecords.map((record) => ({
+        collection_id: collectionIdNum,
+        ...record,
+        full_name: `${record.first_name || ''} ${record.last_name || ''}`.trim(),
+        processing_timestamp: processingTimestamp
+    }));
+    
+    const allRemovedRecordsForDB = (allRemovedRecords || []).map((record) => ({
+        collection_id: collectionIdNum,
+        ...record,
+        processing_timestamp: processingTimestamp
     }));
 
-    // Use chunked inserts for reprocess as well
-    const CHUNK_SIZE_REPROCESS = parseInt(process.env.DB_INSERT_CHUNK_SIZE, 10) || 5000;
-    const chunkAndInsertLocal = async (Model, records, label) => {
-      if (!records || records.length === 0) return 0;
+    await PreProcessRecord.bulkCreate(allPreProcessRecords);
+    await PostProcessRecord.bulkCreate(allPostProcessRecords);
+    await RemovedRecord.bulkCreate(allRemovedRecordsForDB);
 
-      const columnsPerRow = (records[0] && typeof records[0] === 'object') ? Object.keys(records[0]).length : 8;
-      const PARAM_LIMIT = 60000;
-      const safeChunk = Math.max(1, Math.floor(PARAM_LIMIT / Math.max(columnsPerRow, 1)));
-      let effectiveChunk = Math.min(CHUNK_SIZE_REPROCESS, safeChunk);
-      if (CHUNK_SIZE_REPROCESS > safeChunk) {
-        logger.warn(`Reducing reprocess chunk size from ${CHUNK_SIZE_REPROCESS} to safe size ${effectiveChunk} to avoid DB parameter limits (${columnsPerRow} cols per row).`);
-      }
+    // Upload new processed files
+    const processedFiles = [];
+    if (allPreProcessingJson[0]) {
+      processedFiles.push({ name: `${file.name}.pre-processing.json`, content: JSON.stringify(allPreProcessingJson[0], null, 2), contentType: 'application/json' });
+    }
+    if (allPostProcessingJson[0]) {
+      processedFiles.push({ name: `${file.name}.post-processing.json`, content: JSON.stringify(allPostProcessingJson[0], null, 2), contentType: 'application/json' });
+    }
 
-      for (let i = 0; i < records.length; i += effectiveChunk) {
-        const chunk = records.slice(i, i + effectiveChunk);
-        await Model.bulkCreate(chunk);
-        logger.info(`Reprocess inserted chunk ${Math.floor(i / effectiveChunk) + 1} for ${label}: ${chunk.length} rows`);
-      }
-    };
-
-    await chunkAndInsertLocal(PreProcessRecord, preProcessRecords, 'pre-process');
-    await chunkAndInsertLocal(PostProcessRecord, postProcessRecords, 'post-process');
-    await chunkAndInsertLocal(RemovedRecord, removedRecords, 'removed');
+    if (processedFiles.length > 0) {
+      const processedGcsPaths = await CloudStorageService.uploadProcessedFiles(processedFiles, fileMetadata.collection_id, fileMetadata.batch_id);
+      const processedDir = path.dirname(processedGcsPaths[0]);
+      await fileMetadata.updateCloudStoragePathProcessed(processedDir);
+    }
 
     await fileMetadata.updateStatus('completed');
+    const finalMetadata = await FileMetadata.findById(fileId);
 
-  broadcast({ type: 'FILE_REPROCESSED', collectionId: fileMetadata.collection_id, batchId: fileMetadata.batch_id || null, fileId: fileMetadata.id });
+    broadcast({ type: 'FILE_REPROCESSED', collectionId: fileMetadata.collection_id, fileId: fileMetadata.id, fileMetadata: finalMetadata });
 
     res.json({ success: true, message: `File ${fileId} has been reprocessed.` });
+
   } catch (err) {
     logger.error('Error in reprocessFile:', err);
+    const fileMetadata = await FileMetadata.findById(fileId);
+    if(fileMetadata) await fileMetadata.updateStatus('failed');
+    broadcast({ type: 'FILE_REPROCESSING_FAILED', fileId: fileId });
     res.status(500).json({ error: err.message });
+  } finally {
+    reprocessLocks.delete(fileId);
   }
 };
 

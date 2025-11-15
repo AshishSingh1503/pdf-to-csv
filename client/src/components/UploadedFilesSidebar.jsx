@@ -1,9 +1,55 @@
 // client/src/components/UploadedFilesSidebar.jsx
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { getUploadedFiles, getBatchStatus } from '../api/documentApi';
+import { getUploadedFiles, getBatchStatus, reprocessFile } from '../api/documentApi';
 import socket from '../services/websocket';
 import ProgressBar from './ProgressBar';
 import EmptyState from './EmptyState'
+
+const ReprocessButton = ({ file, onReprocess }) => {
+  const [isReprocessing, setIsReprocessing] = useState(false);
+
+  const handleReprocessClick = async (e) => {
+    e.stopPropagation();
+    if (isReprocessing) return;
+    setIsReprocessing(true);
+    try {
+      await onReprocess(file.id);
+    } catch (error) {
+      console.error(`Reprocessing failed for file ${file.id}:`, error);
+      // Optionally show a toast or message to the user
+    } finally {
+      setIsReprocessing(false);
+    }
+  };
+
+  const isTerminalStatus = file.processing_status === 'completed' || file.processing_status === 'failed';
+  const canReprocess = isTerminalStatus && file.cloud_storage_path_raw;
+  const tooltipText = !isTerminalStatus
+    ? 'File must be in a "completed" or "failed" state to reprocess.'
+    : !file.cloud_storage_path_raw
+    ? 'Raw PDF removed - reprocess unavailable.'
+    : 'Reprocess this file';
+
+  return (
+    <div className="relative group">
+      <button
+        onClick={handleReprocessClick}
+        disabled={!canReprocess || isReprocessing}
+        className={`px-2 py-1 text-xs font-semibold rounded ${
+          canReprocess
+            ? 'bg-blue-100 text-blue-700 hover:bg-blue-200 dark:bg-blue-900/30 dark:text-blue-300 dark:hover:bg-blue-900/50'
+            : 'bg-gray-100 text-gray-400 cursor-not-allowed dark:bg-gray-600 dark:text-gray-500'
+        }`}
+      >
+        {isReprocessing ? '...' : 'Reprocess'}
+      </button>
+      <div className="absolute bottom-full mb-2 w-max px-2 py-1 bg-gray-700 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
+        {tooltipText}
+      </div>
+    </div>
+  );
+};
+
 
 const UploadedFilesSidebar = ({ isOpen, onClose, selectedCollection, onRefresh, currentBatch = 0, totalBatches = 0 }) => {
   const [files, setFiles] = useState([]);
@@ -428,7 +474,16 @@ const UploadedFilesSidebar = ({ isOpen, onClose, selectedCollection, onRefresh, 
   }, [selectedCollection, isOpen, fetchFiles, scheduleFetchFiles]);
 
 
-  // removed unused/redundant handlers (re-enable when UI supports them)
+  const handleReprocess = async (fileId) => {
+    try {
+      await reprocessFile(fileId);
+      // The websocket will update the file status, but we can also optimistically update it here
+      setFiles(prev => prev.map(f => f.id === fileId ? { ...f, processing_status: 'reprocessing' } : f));
+    } catch (error) {
+      console.error('Error reprocessing file:', error);
+      // You might want to show a toast notification to the user here
+    }
+  };
 
   const formatElapsedTime = (startTime) => {
     if (!startTime) return '';
@@ -673,9 +728,10 @@ const UploadedFilesSidebar = ({ isOpen, onClose, selectedCollection, onRefresh, 
                     <div className="truncate">
                       <p className="text-sm font-medium text-gray-900 dark:text-white">{file.original_filename}</p>
                       <p className="text-xs text-gray-500 dark:text-gray-400">
-                        Status: <span className={`font-semibold ${file.processing_status === 'completed' ? 'text-green-500' : 'text-yellow-500'}`}>{file.processing_status}</span>
+                        Status: <span className={`font-semibold ${file.processing_status === 'completed' ? 'text-green-500' : file.processing_status === 'failed' ? 'text-red-500' : 'text-yellow-500'}`}>{file.processing_status}</span>
                       </p>
                     </div>
+                    <ReprocessButton file={file} onReprocess={handleReprocess} />
                   </li>
                 ))}
               </ul>

@@ -63,6 +63,7 @@ config.env
 
 /client/node_modules
 /server/node_modules
+/test_scripts/node_modules
 
 /server/output
 

@@ -13,13 +13,23 @@ export class Collection {
   }
 
   // Get all collections
-  static async findAll(customerId) {
+  static async findAll(customerId, status = 'active') {
     let queryText = 'SELECT * FROM collections';
     const params = [];
+    let whereClauses = [];
 
     if (customerId) {
-      queryText += ' WHERE customer_id = $1';
       params.push(customerId);
+      whereClauses.push(`customer_id = $${params.length}`);
+    }
+
+    if (status && status !== 'all') {
+      params.push(status);
+      whereClauses.push(`status = $${params.length}`);
+    }
+
+    if (whereClauses.length > 0) {
+      queryText += ' WHERE ' + whereClauses.join(' AND ');
     }
     
     queryText += ' ORDER BY created_at DESC';
@@ -29,11 +39,16 @@ export class Collection {
   }
 
   // Get collection by ID
-  static async findById(id) {
-    const result = await query(
-      'SELECT * FROM collections WHERE id = $1 AND status = $2',
-      [id, 'active']
-    );
+  static async findById(id, status = 'active') {
+    let queryText = 'SELECT * FROM collections WHERE id = $1';
+    const params = [id];
+
+    if (status && status !== 'all') {
+      params.push(status);
+      queryText += ` AND status = $${params.length}`;
+    }
+
+    const result = await query(queryText, params);
     return result.rows.length > 0 ? new Collection(result.rows[0]) : null;
   }
 
@@ -54,6 +69,19 @@ export class Collection {
     );
     if (result.rows.length > 0) {
       Object.assign(this, result.rows[0]);
+      return this;
+    }
+    return null;
+  }
+
+  // Unarchive collection
+  async unarchive() {
+    const result = await query(
+      'UPDATE collections SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 RETURNING *',
+      ['active', this.id]
+    );
+    if (result.rows.length > 0) {
+      this.status = 'active';
       return this;
     }
     return null;

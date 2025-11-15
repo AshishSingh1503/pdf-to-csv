@@ -9,7 +9,8 @@ import EmptyState from './EmptyState'
 
 const CustomersSidebar = ({ isOpen = true, onClose = () => {}, selectedCustomer, onCustomerSelect, onCollectionSelect, onRefresh }) => {
   const [customers, setCustomers] = useState([]);
-  const [collections, setCollections] = useState({});
+  const [activeCollections, setActiveCollections] = useState({});
+  const [archivedCollections, setArchivedCollections] = useState({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [isDesktop, setIsDesktop] = useState(false);
@@ -36,10 +37,36 @@ const CustomersSidebar = ({ isOpen = true, onClose = () => {}, selectedCustomer,
 
   const fetchCollectionsForCustomer = async (customerId) => {
     try {
-      const response = await collectionsApi.getAll(customerId);
-      setCollections(prev => ({ ...prev, [customerId]: response.data }));
+      const active = await collectionsApi.getAll(customerId, 'active');
+      setActiveCollections(prev => ({ ...prev, [customerId]: active.data }));
+      const archived = await collectionsApi.getAll(customerId, 'archived');
+      setArchivedCollections(prev => ({ ...prev, [customerId]: archived.data }));
     } catch (err) {
       console.error(`Error fetching collections for customer ${customerId}:`, err);
+    }
+  };
+
+  const handleArchiveCollection = async (collectionId, customerId) => {
+    const confirmed = window.confirm('Are you sure you want to archive this collection?');
+    if (!confirmed) return;
+    try {
+      await collectionsApi.archive(collectionId);
+      fetchCollectionsForCustomer(customerId);
+      if (onRefresh) onRefresh();
+    } catch (err) {
+      console.error('Failed to archive collection:', err);
+    }
+  };
+
+  const handleUnarchiveCollection = async (collectionId, customerId) => {
+    const confirmed = window.confirm('Are you sure you want to unarchive this collection?');
+    if (!confirmed) return;
+    try {
+      await collectionsApi.unarchive(collectionId);
+      fetchCollectionsForCustomer(customerId);
+      if (onRefresh) onRefresh();
+    } catch (err) {
+      console.error('Failed to unarchive collection:', err);
     }
   };
 
@@ -108,6 +135,13 @@ const CustomersSidebar = ({ isOpen = true, onClose = () => {}, selectedCustomer,
     setShowCollectionModal(true);
   };
 
+  const handleEditCollection = (collection, customer) => {
+    setModalMode('edit');
+    setEditingCollection(collection);
+    setCurrentCustomer(customer);
+    setShowCollectionModal(true);
+  };
+
   const handleCustomerModalSave = () => {
     fetchCustomers();
     if (onRefresh) onRefresh();
@@ -162,7 +196,7 @@ const CustomersSidebar = ({ isOpen = true, onClose = () => {}, selectedCustomer,
                  <div>
                    <div className="font-medium text-gray-900 dark:text-slate-100">{customer.name}</div>
                    <div className="text-sm text-slate-500 dark:text-slate-300">
-                     {collections[customer.id]?.length || 0} collections
+                     {activeCollections[customer.id]?.length || 0} active collections
                    </div>
                  </div>
                  <div className="flex items-center space-x-2">
@@ -191,19 +225,67 @@ const CustomersSidebar = ({ isOpen = true, onClose = () => {}, selectedCustomer,
                </div>
                {selectedCustomer && selectedCustomer.id === customer.id && (
                  <div className="ml-4 mt-2 space-y-1">
-                   {collections[customer.id]?.map(collection => (
+                   {activeCollections[customer.id]?.map(collection => (
                      <div
                        key={collection.id}
-                       className="p-2 rounded-lg cursor-pointer bg-gray-100 dark:bg-slate-700 hover:bg-gray-200 dark:hover:bg-slate-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 active:scale-95"
+                       className="p-2 rounded-lg cursor-pointer bg-gray-100 dark:bg-slate-700 hover:bg-gray-200 dark:hover:bg-slate-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 active:scale-95 flex justify-between items-center"
                        onClick={() => onCollectionSelect(collection)}
                        tabIndex={0}
                        role="button"
                        aria-label={`Select collection ${collection.name}`}
                        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onCollectionSelect(collection) } }}
                      >
-                       {collection.name}
+                       <span>{collection.name}</span>
+                        <div className="relative group">
+                          <button className="text-xs text-gray-500 hover:text-gray-700">...</button>
+                          <div className="absolute right-0 w-28 bg-white border rounded shadow-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none group-hover:pointer-events-auto z-10">
+                            <a
+                              href="#"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleEditCollection(collection, customer);
+                              }}
+                              className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
+                            >
+                              Rename
+                            </a>
+                            <a
+                              href="#"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleArchiveCollection(collection.id, customer.id);
+                              }}
+                              className="block px-4 py-2 text-sm text-red-600 hover:bg-gray-100"
+                            >
+                              Archive
+                            </a>
+                          </div>
+                        </div>
                      </div>
                    ))}
+                   {archivedCollections[customer.id]?.length > 0 && (
+                     <div>
+                       <h4 className="mt-2 text-sm font-semibold text-gray-500">Archived</h4>
+                       {archivedCollections[customer.id].map(collection => (
+                         <div
+                           key={collection.id}
+                           className="p-2 rounded-lg bg-gray-50 dark:bg-slate-800 text-gray-400 flex justify-between items-center"
+                         >
+                           <span>{collection.name}</span>
+                           <button
+                             onClick={(e) => {
+                               e.stopPropagation();
+                               handleUnarchiveCollection(collection.id, customer.id);
+                             }}
+                             className="text-xs text-gray-500 hover:text-blue-500"
+                             title="Unarchive Collection"
+                           >
+                             Unarchive
+                           </button>
+                         </div>
+                       ))}
+                     </div>
+                   )}
                  </div>
                )}
              </div>

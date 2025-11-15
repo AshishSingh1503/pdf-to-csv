@@ -178,8 +178,7 @@ graph TB
     end
     
     subgraph "Storage"
-        InputBucket["Input Bucket<br/>pdf-data-extraction-input"]
-        OutputBucket["Output Bucket<br/>pdf-data-extraction-output"]
+        StorageBucket["Storage Bucket<br/>pdf-data-extraction-output"]
     end
     
     subgraph "Networking"
@@ -189,8 +188,7 @@ graph TB
     FrontendService -->|API Calls| BackendService
     BackendService -->|Unix Socket| VPCConnector
     VPCConnector --> CloudSQLInstance
-    BackendService --> InputBucket
-    BackendService --> OutputBucket
+    BackendService --> StorageBucket
 ```
 
 ---
@@ -429,6 +427,41 @@ gcloud logging read "resource.type=cloud_run_revision AND resource.labels.servic
 - ✅ Cloud Storage buckets are accessible
 - ✅ Environment variables are correctly set
 
+### Storage Structure
+
+The application uses a single Google Cloud Storage bucket (`OUTPUT_BUCKET`) with the following prefix structure:
+
+-   `raw/<collectionId>/<batchId>/<filename.pdf>`: Stores the original, raw PDF files uploaded by the user.
+-   `processed/<collectionId>/<batchId>/`: Stores the processed output files, such as `pre-processing.json` and `post-processing.json`.
+
+This structure organizes files by collection and batch, making them easy to locate for reprocessing or auditing.
+
+### Lifecycle Policy (Alternative to Immediate Deletion)
+
+As an alternative to immediate deletion of raw PDFs, you can set a lifecycle policy on the `raw/` prefix to automatically delete files after a specified number of days. This can be useful for retaining raw files for a short period for auditing or reprocessing, while still managing storage costs.
+
+To set a 30-day deletion policy, create a file named `lifecycle.json`:
+
+```json
+{
+  "rule": [
+    {
+      "action": { "type": "Delete" },
+      "condition": {
+        "age": 30,
+        "matchesPrefix": ["raw/"]
+      }
+    }
+  ]
+}
+```
+
+Then, apply the policy using `gcloud`:
+
+```bash
+gcloud storage buckets update gs://<YOUR_OUTPUT_BUCKET_NAME> --lifecycle-file=lifecycle.json
+```
+
 For troubleshooting deployment issues, see [docs/DEBUGGING.md](docs/DEBUGGING.md).
 
 **Deployment Process:**
@@ -502,9 +535,9 @@ DB_PASSWORD=AppUser2024!
 DB_SSL=false
 
 # Cloud Storage Configuration
-INPUT_BUCKET=pdf-data-extraction-input-bucket
 OUTPUT_BUCKET=pdf-data-extraction-output-bucket
 STORAGE_LOCATION=us
+DELETE_RAW_AFTER_PROCESS=false
 
 # Output Configuration
 OUTPUT_DIR=output
