@@ -6,6 +6,7 @@ import {
   createCollection,
   updateCollection,
   archiveCollection,
+  unarchiveCollection,
   deleteCollection
 } from '../controllers/collectionController.js';
 
@@ -17,6 +18,7 @@ router.get('/:id', getCollectionById);
 router.post('/', createCollection);
 router.put('/:id', updateCollection);
 router.patch('/:id/archive', archiveCollection);
+router.patch('/:id/unarchive', unarchiveCollection);
 router.delete('/:id', deleteCollection);
 
 export default router;

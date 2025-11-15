@@ -25,10 +25,51 @@ An intelligent document processing system that extracts structured contact infor
 - [Getting Started](#-getting-started)
 - [Deployment](#️-deployment)
 - [Environment Configuration](#️-environment-configuration)
+- [Project Structure](#-project-structure)
 - [API Documentation](#-api-documentation)
 - [Database Schema](#-database-schema)
 - [Contributing](#-contributing)
 - [License](#-license)
+- [Documentation](#-documentation)
+
+## 📁 Project Structure
+
+```
+.  ├── archive/                    # Archived legacy code
+.  │   └── legacy-python/         # Python/Streamlit implementation (deprecated)
+.  ├── client/                     # React frontend application
+.  │   ├── src/
+.  │   │   ├── components/        # React components
+.  │   │   ├── contexts/          # React contexts (Theme, Toast)
+.  │   │   ├── pages/             # Page components
+.  │   │   ├── services/          # WebSocket and API services
+.  │   │   └── api/               # API client modules
+.  │   ├── Dockerfile             # Frontend container image
+.  │   └── package.json           # Frontend dependencies
+.  ├── server/                     # Node.js backend application
+.  │   ├── src/
+.  │   │   ├── config/            # Configuration management
+.  │   │   ├── controllers/       # Request handlers
+.  │   │   ├── models/            # Database models
+.  │   │   ├── routes/            # API route definitions
+.  │   │   ├── services/          # Business logic (Document AI, batch processing)
+.  │   │   └── utils/             # Utility functions
+.  │   ├── db/                    # Database schema files
+.  │   ├── Dockerfile             # Backend container image
+.  │   └── package.json           # Backend dependencies
+.  ├── docs/                       # Technical documentation
+.  │   ├── ARCHITECTURE.md        # Comprehensive technical guide
+.  │   ├── DATABASE.md            # Database documentation
+.  │   ├── DEBUGGING.md           # Troubleshooting guide
+.  │   ├── TESTING.md             # Testing procedures
+.  │   └── sql/                   # Reference SQL scripts
+.  ├── migrations/                 # Database migrations
+.  ├── test_scripts/              # Testing utilities
+.  ├── setup_new_db.sql           # Database setup script
+.  ├── deploy.sh                  # GCP deployment script
+.  ├── setup-gcp.sh               # GCP infrastructure setup
+.  └── cloud-run-config.yaml      # Cloud Run configuration
+```
 
 ---
 
@@ -37,7 +78,7 @@ An intelligent document processing system that extracts structured contact infor
 This system automates the extraction of contact information from PDF documents using Google Cloud Document AI. It processes PDFs to extract names, phone numbers, emails, addresses, and other contact details, storing them in a PostgreSQL database with pre-processing and post-processing validation stages.
 
 **Key Capabilities:**
-- Batch PDF processing with parallel execution (up to 12 concurrent workers)
+- Batch PDF processing with parallel execution (up to 150 concurrent workers in high-performance mode)
 - Real-time WebSocket updates for processing status
 - Duplicate detection and data validation
 - Export to CSV/Excel formats
@@ -50,7 +91,7 @@ This system automates the extraction of contact information from PDF documents u
 
 ### Document Processing
 - **AI-Powered Extraction**: Leverages Google Document AI for intelligent entity recognition
-- **Parallel Processing**: Handles multiple PDFs concurrently with configurable worker pools (up to 12 workers)
+- **Parallel Processing**: Handles multiple PDFs concurrently with configurable worker pools (up to 150 workers in high-performance mode)
 - **Large File Support**: Processes PDFs up to 50MB with optimized memory management
 - **Automatic Retry**: Built-in retry logic with exponential backoff for failed requests (3 attempts, 10-minute timeout)
 
@@ -88,7 +129,7 @@ graph TB
     end
     
     subgraph "Processing Layer"
-        DocProcessor["Document Processor<br/>Worker Pool (12 workers)"]
+  DocProcessor["Document Processor<br/>Worker Pool (up to 150 workers)"]
         NameParser["Name Parser<br/>Entity Extraction"]
     end
     
@@ -137,8 +178,7 @@ graph TB
     end
     
     subgraph "Storage"
-        InputBucket["Input Bucket<br/>pdf-data-extraction-input"]
-        OutputBucket["Output Bucket<br/>pdf-data-extraction-output"]
+        StorageBucket["Storage Bucket<br/>pdf-data-extraction-output"]
     end
     
     subgraph "Networking"
@@ -148,8 +188,7 @@ graph TB
     FrontendService -->|API Calls| BackendService
     BackendService -->|Unix Socket| VPCConnector
     VPCConnector --> CloudSQLInstance
-    BackendService --> InputBucket
-    BackendService --> OutputBucket
+    BackendService --> StorageBucket
 ```
 
 ---
@@ -242,6 +281,8 @@ Initialize schema:
 ```bash
 psql -U pdf2csv_user -d pdf2csv_db -f setup_new_db.sql
 ```
+
+For detailed database documentation including schema reference, migrations, and maintenance, see [docs/DATABASE.md](docs/DATABASE.md).
 
 ### 3. Backend Setup
 
@@ -361,10 +402,72 @@ chmod +x deploy.sh
 ./deploy.sh
 ```
 
+**Verify Deployment:**
+
+```bash
+# Check backend service status
+gcloud run services describe pdf2csv-backend --region us-central1
+
+# Check frontend service status
+gcloud run services describe pdf2csv-frontend --region us-central1
+
+# Test backend health
+curl https://pdf2csv-backend-<hash>.run.app/api/test/document-ai
+
+# View logs
+gcloud logging read "resource.type=cloud_run_revision AND resource.labels.service_name=pdf2csv-backend" --limit 50
+```
+
+**Deployment Verification Checklist:**
+- ✅ Backend service responds to health checks
+- ✅ Frontend loads and connects to backend
+- ✅ WebSocket connection establishes successfully
+- ✅ Document AI test endpoint returns success
+- ✅ Database connection is established (check logs)
+- ✅ Cloud Storage buckets are accessible
+- ✅ Environment variables are correctly set
+
+### Storage Structure
+
+The application uses a single Google Cloud Storage bucket (`OUTPUT_BUCKET`) with the following prefix structure:
+
+-   `raw/<collectionId>/<batchId>/<filename.pdf>`: Stores the original, raw PDF files uploaded by the user.
+-   `processed/<collectionId>/<batchId>/`: Stores the processed output files, such as `pre-processing.json` and `post-processing.json`.
+
+This structure organizes files by collection and batch, making them easy to locate for reprocessing or auditing.
+
+### Lifecycle Policy (Alternative to Immediate Deletion)
+
+As an alternative to immediate deletion of raw PDFs, you can set a lifecycle policy on the `raw/` prefix to automatically delete files after a specified number of days. This can be useful for retaining raw files for a short period for auditing or reprocessing, while still managing storage costs.
+
+To set a 30-day deletion policy, create a file named `lifecycle.json`:
+
+```json
+{
+  "rule": [
+    {
+      "action": { "type": "Delete" },
+      "condition": {
+        "age": 30,
+        "matchesPrefix": ["raw/"]
+      }
+    }
+  ]
+}
+```
+
+Then, apply the policy using `gcloud`:
+
+```bash
+gcloud storage buckets update gs://<YOUR_OUTPUT_BUCKET_NAME> --lifecycle-file=lifecycle.json
+```
+
+For troubleshooting deployment issues, see [docs/DEBUGGING.md](docs/DEBUGGING.md).
+
 **Deployment Process:**
 1. Builds backend Docker image
 2. Builds frontend Docker image
-3. Deploys backend to Cloud Run (4Gi RAM, 2 CPUs, 300s timeout)
+3. Deploys backend to Cloud Run (32Gi RAM, 8 CPUs, 1800s timeout for high-performance)
 4. Deploys frontend to Cloud Run (1Gi RAM, 1 CPU)
 5. Configures environment variables and Cloud SQL connection
 
@@ -372,10 +475,41 @@ chmod +x deploy.sh
 
 | Service | Memory | CPU | Timeout | Reason |
 |---------|--------|-----|---------|--------|
-| Backend | 4Gi | 2 | 300s | Document AI processing + worker pool |
+| Backend | 32Gi | 8 | 1800s | Document AI processing + worker pool (high-performance) |
 | Frontend | 1Gi | 1 | 60s | Static file serving |
 
 ---
+
+### High-Performance Configuration
+
+This application is optimized for high-resource environments (8 vGPU / 64GB RAM) with aggressive parallel processing:
+
+**Worker Scaling:**
+- 1 file → 4 workers
+- 2 files → 8 workers
+- ≤10 files → 10 workers
+- ≤30 files → up to 50 workers
+- ≤100 files → 80 workers
+- >100 files → 120 workers
+- Maximum capacity: 150 concurrent Document AI requests
+
+**Database Configuration:**
+- Connection pool: 500 connections (DB_POOL_MAX=500)
+- Bulk insert chunk size: 5000 records (DB_INSERT_CHUNK_SIZE=5000)
+- Optimized for high-concurrency workloads
+
+**Batch Processing:**
+- Concurrent batches: 20 (MAX_CONCURRENT_BATCHES=20)
+- Batch timeout: 30 minutes (BATCH_QUEUE_TIMEOUT=1800000)
+- Queue capacity: 500 batches (MAX_QUEUE_LENGTH=500)
+- Worker threads: 16 (WORKER_THREAD_POOL_SIZE=16)
+
+**Cloud Run Resources:**
+- Backend: 32Gi RAM, 8 CPUs, 30-minute timeout
+- Frontend: 1Gi RAM, 1 CPU, 60-second timeout
+
+**Note:** These settings prioritize speed and throughput over conservative resource usage. Ensure your Cloud SQL instance and Document AI quotas can support this level of concurrency. For cost optimization, consider scaling down resources during low-traffic periods.
+
 
 ## ⚙️ Environment Configuration
 
@@ -401,9 +535,9 @@ DB_PASSWORD=AppUser2024!
 DB_SSL=false
 
 # Cloud Storage Configuration
-INPUT_BUCKET=pdf-data-extraction-input-bucket
 OUTPUT_BUCKET=pdf-data-extraction-output-bucket
 STORAGE_LOCATION=us
+DELETE_RAW_AFTER_PROCESS=false
 
 # Output Configuration
 OUTPUT_DIR=output
@@ -717,6 +851,22 @@ gcloud compute networks vpc-access connectors describe pdf2csv-connector \
 -->
 
 ## 🤝 Contributing
+
+## 📚 Documentation
+
+### Technical Documentation
+- **[Architecture Guide](docs/ARCHITECTURE.md)** - Comprehensive technical architecture, file walkthrough, event contracts, and deployment strategies
+- **[Testing Guide](docs/TESTING.md)** - Manual and automated testing procedures for batch processing
+- **[Debugging Guide](docs/DEBUGGING.md)** - Troubleshooting guide for common batch processing issues
+- **[Database Guide](docs/DATABASE.md)** - Database setup, schema reference, migrations, and SQL scripts documentation
+
+### Operational Documentation
+- **[Batch Processing Architecture](BATCH_PROCESSING_ARCHITECTURE.md)** - Batch processing event flow and component responsibilities
+- **[Queue System](QUEUE_SYSTEM.md)** - Queue configuration, event contracts, and operational guidance
+- **[Admin API](ADMIN_API.md)** - Admin endpoints for monitoring and management
+
+For a complete documentation index, see [docs/README.md](docs/README.md).
+
 
 Contributions are welcome! Please follow these guidelines:
 

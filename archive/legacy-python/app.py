@@ -62,7 +62,7 @@ if uploaded_files:
         if not uploaded_files:
             st.warning("Please upload at least one PDF file.")
             st.stop()
-
+ 
         all_raw_records = []
         all_filtered_records = []
         all_pre_processing_json = []

@@ -1,8 +1,79 @@
 .git
+# Git files
+.git
 .gitignore
+
+# Documentation
 README.md
+README_COMPREHENSIVE.md
+BATCH_PROCESSING_ARCHITECTURE.md
+QUEUE_SYSTEM.md
+ADMIN_API.md
+DEBUGGING_BATCH_PROCESSING.md
+TESTING_GUIDE.md
+docs/
+*.md
+
+# Archive
+archive/
+
+# Docker files
 Dockerfile
 .dockerignore
-node_modules
+
+# Node.js
+node_modules/
 npm-debug.log
-.pytest_cache
+yarn-error.log
+package-lock.json
+yarn.lock
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+venv/
+env/
+*.pyc
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test files
+test_*
+*_test.js
+*_test.py
+*.test.js
+test_scripts/
+
+# SQL scripts
+*.sql
+setup_new_db.sql
+recreate_db.sql
+insert_test_data.sql
+database_validation_queries.sql
+migrations/
+
+# Logs and temporary files
+*.log
+logs/
+temp/
+uploads/
+exports/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Build artifacts
+build/
+dist/
+.cache/

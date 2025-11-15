@@ -1,9 +1,9 @@
 import React from "react";
 import { apiClient } from "../api/apiClient";
-import { useToast } from '../contexts/ToastContext'
+// Toast system removed: using console logging instead
 
 const Footer = ({ customer, isPostProcess, onToggleProcess, sortField, onClearSort, selectedCollection }) => {
-  const { showError } = useToast()
+  // Replaced showError with console.error
   const handleDownload = (fileType) => {
     if (selectedCollection) {
       const type = isPostProcess ? 'post' : 'pre';
@@ -13,14 +13,14 @@ const Footer = ({ customer, isPostProcess, onToggleProcess, sortField, onClearSo
       }
       url += `?type=${type}`;
       window.open(url, "_blank");
-    } else {
-      showError("Please select a collection to download")
+      } else {
+      console.error("Please select a collection to download")
     }
   };
 
   const handleDownloadSummary = () => {
     if (!selectedCollection || !selectedCollection.id) {
-      showError("Please select a collection to download")
+      console.error("Please select a collection to download")
       return;
     }
 

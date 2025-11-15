@@ -286,7 +286,7 @@ class BatchQueueManager extends EventEmitter {
       }
 
   // trigger processing of queued batches
-  setImmediate(() => this.processNext())
+  this.processNext()
   // Cleanup failedBatches set entry to avoid unbounded memory growth
   try { this.failedBatches.delete(batchId) } catch (e) {}
   return true

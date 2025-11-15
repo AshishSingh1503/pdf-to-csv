@@ -80,7 +80,7 @@ Date: 2025-11-09
 
 ### Test Case 6 — Database Validation
 
-1. After a batch completes, run the SQL validation queries in `docs/sql/database_validation_queries.sql` (see the SQL file for exact queries).
+1. After a batch completes, run the SQL validation queries in `sql/database_validation_queries.sql` (see the SQL file for exact queries).
 2. Verify that all files in a batch have the same `batch_id`, and that `processing_status` is either `completed` or `failed` (none in `processing`).
 
 ## Debugging tips
@@ -123,7 +123,7 @@ npm run dev
 
 Run test script (requires Node dependencies listed in the script file):
 ```powershell
-node test_scripts/batch_upload_test.js
+node ../test_scripts/batch_upload_test.js
 ```
 
 ## Known limitations
@@ -132,4 +132,5 @@ node test_scripts/batch_upload_test.js
 - The success auto-dismiss is time-based (5s); adjust if necessary during testing.
 
 ---
-For step-by-step SQL queries and automated scripts, see `docs/sql/database_validation_queries.sql` and `test_scripts/batch_upload_test.js`.
+
+For step-by-step SQL queries and automated scripts, see `sql/database_validation_queries.sql` and `../test_scripts/batch_upload_test.js`.

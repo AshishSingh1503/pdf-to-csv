@@ -7,6 +7,8 @@ export class FileMetadata {
     this.collection_id = data.collection_id;
     this.original_filename = data.original_filename;
     this.cloud_storage_path = data.cloud_storage_path;
+    this.cloud_storage_path_raw = data.cloud_storage_path_raw;
+    this.cloud_storage_path_processed = data.cloud_storage_path_processed;
     this.file_size = data.file_size;
     this.processing_status = data.processing_status;
     this.upload_progress = data.upload_progress;
@@ -56,6 +58,30 @@ export class FileMetadata {
     );
     if (result.rows.length > 0) {
       this.cloud_storage_path = path;
+      return this;
+    }
+    return null;
+  }
+
+  async updateCloudStoragePathRaw(path) {
+    const result = await query(
+      'UPDATE file_metadata SET cloud_storage_path_raw = $1 WHERE id = $2 RETURNING *',
+      [path, this.id]
+    );
+    if (result.rows.length > 0) {
+      this.cloud_storage_path_raw = path;
+      return this;
+    }
+    return null;
+  }
+
+  async updateCloudStoragePathProcessed(path) {
+    const result = await query(
+      'UPDATE file_metadata SET cloud_storage_path_processed = $1 WHERE id = $2 RETURNING *',
+      [path, this.id]
+    );
+    if (result.rows.length > 0) {
+      this.cloud_storage_path_processed = path;
       return this;
     }
     return null;

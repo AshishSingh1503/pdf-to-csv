@@ -11,210 +11,148 @@ const storage = new Storage({
   projectId: config.projectId,
 });
 
-const inputBucket = storage.bucket(config.inputBucket);
 const outputBucket = storage.bucket(config.outputBucket);
 
 export class CloudStorageService {
-  // Upload processed files to Cloud Storage
-  static async uploadProcessedFiles(files, collectionId) {
-    const uploadPromises = [];
-    const uploadedFiles = [];
+  /**
+   * Uploads a raw PDF file to GCS under the 'raw/' prefix.
+   * @param {Object} file - The file object from the request.
+   * @param {string} collectionId - The ID of the collection.
+   * @param {string} batchId - The ID of the batch.
+   * @returns {Promise<string>} The full GCS path of the uploaded file.
+   */
+  static async uploadRawFile(file, collectionId, batchId) {
+    const fileName = `raw/${collectionId}/${batchId}/${file.name}`;
+    const fileUpload = outputBucket.file(fileName);
 
-    for (const file of files) {
+    return new Promise((resolve, reject) => {
+      const stream = fileUpload.createWriteStream({
+        metadata: {
+          contentType: file.mimetype || 'application/pdf',
+          metadata: {
+            originalName: file.name,
+            collectionId: collectionId.toString(),
+            batchId: batchId,
+          },
+        },
+      });
+
+      stream.on('error', (error) => {
+        logger.error(`Upload error for ${file.name}:`, error);
+        reject(error);
+      });
+
+      stream.on('finish', () => {
+        const gcsPath = `gs://${config.outputBucket}/${fileName}`;
+        logger.info(`Uploaded raw file ${file.name} to ${gcsPath}`);
+        resolve(gcsPath);
+      });
+
+      stream.end(file.data);
+    });
+  }
+
+  /**
+   * Uploads processed output files (like JSON) to GCS under the 'processed/' prefix.
+   * @param {Array<Object>} files - Array of file objects with 'name' and 'content' properties.
+   * @param {string} collectionId - The ID of the collection.
+   * @param {string} batchId - The ID of the batch.
+   * @returns {Promise<Array<string>>} A promise that resolves with an array of GCS paths.
+   */
+  static async uploadProcessedFiles(files, collectionId, batchId) {
+    const uploadPromises = files.map(file => {
+      const fileName = `processed/${collectionId}/${batchId}/${file.name}`;
+      const fileUpload = outputBucket.file(fileName);
+      const gcsPath = `gs://${config.outputBucket}/${fileName}`;
+
+      return new Promise((resolve, reject) => {
+        const stream = fileUpload.createWriteStream({
+          metadata: { contentType: file.contentType || 'application/json' },
+        });
+        stream.on('error', reject);
+        stream.on('finish', () => {
+          logger.info(`Uploaded processed file to ${gcsPath}`);
+          resolve(gcsPath);
+        });
+        stream.end(file.content);
+      });
+    });
+
+    return Promise.all(uploadPromises);
+  }
+
+  /**
+   * Checks if a file exists at the given GCS path.
+   * @param {string} gcsPath - The full GCS path (e.g., 'gs://bucket/path/to/file').
+   * @returns {Promise<boolean>} True if the file exists, false otherwise.
+   */
+  static async fileExists(gcsPath) {
+    const { bucket, name } = this.parseGcsPath(gcsPath);
+    if (!bucket || !name) return false;
+    const [exists] = await storage.bucket(bucket).file(name).exists();
+    return exists;
+  }
+
+  /**
+   * Deletes a file from GCS with retry logic.
+   * @param {string} gcsPath - The full GCS path.
+   */
+  static async deleteFile(gcsPath) {
+    const { bucket, name } = this.parseGcsPath(gcsPath);
+    if (!bucket || !name) throw new Error('Invalid GCS path');
+
+    let lastError;
+    for (let attempt = 0; attempt < 3; attempt++) {
       try {
-        // Create unique filename with collection ID and timestamp
-        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-        const fileName = `${collectionId}/${timestamp}_${file.name}`;
-        
-        // Upload to output bucket
-        const fileUpload = outputBucket.file(fileName);
-        
-        const uploadPromise = new Promise((resolve, reject) => {
-          const stream = fileUpload.createWriteStream({
-            metadata: {
-              contentType: file.mimetype || 'application/octet-stream',
-              metadata: {
-                originalName: file.name,
-                collectionId: collectionId.toString(),
-                uploadedAt: new Date().toISOString()
-              }
-            }
-          });
-
-          stream.on('error', (error) => {
-            logger.error('Upload error:', error);
-            reject(error);
-          });
-
-          stream.on('finish', () => {
-            logger.info(`Uploaded ${file.name} to Cloud Storage`);
-            resolve({
-              fileName: fileName,
-              originalName: file.name,
-              size: file.size,
-              url: `gs://${config.outputBucket}/${fileName}`
-            });
-          });
-
-          // Write file buffer to stream
-          stream.end(file.data);
-        });
-
-        uploadPromises.push(uploadPromise);
+        await storage.bucket(bucket).file(name).delete();
+        logger.info(`Deleted file from GCS: ${gcsPath}`);
+        return;
       } catch (error) {
-        logger.error(`Error uploading ${file.name}:`, error);
-        uploadPromises.push(Promise.reject(error));
+        lastError = error;
+        if (error.code === 404) {
+          logger.warn(`File not found during deletion (already deleted?): ${gcsPath}`);
+          return;
+        }
+        logger.error(`Error deleting file (attempt ${attempt + 1}):`, error);
+        await new Promise(resolve => setTimeout(resolve, 1000 * Math.pow(2, attempt)));
       }
     }
-
-    try {
-      const results = await Promise.all(uploadPromises);
-      uploadedFiles.push(...results);
-    } catch (error) {
-      logger.error('Some files failed to upload:', error);
-    }
-
-    return uploadedFiles;
+    throw lastError;
   }
 
-  // Upload CSV/Excel files to Cloud Storage
-  static async uploadProcessedData(csvBuffer, excelBuffer, collectionId, processingTimestamp) {
-    const uploadPromises = [];
-    const uploadedFiles = [];
+  /**
+   * Downloads a file from GCS to a temporary local path.
+   * @param {string} gcsPath - The full GCS path.
+   * @returns {Promise<string>} The path to the temporary local file.
+   */
+  static async downloadFile(gcsPath) {
+    const { bucket, name } = this.parseGcsPath(gcsPath);
+    if (!bucket || !name) throw new Error('Invalid GCS path');
 
-    try {
-      // Upload CSV
-      if (csvBuffer) {
-        const csvFileName = `${collectionId}/processed_data_${processingTimestamp}.csv`;
-        const csvFile = outputBucket.file(csvFileName);
-        
-        const csvUpload = new Promise((resolve, reject) => {
-          const stream = csvFile.createWriteStream({
-            metadata: {
-              contentType: 'text/csv',
-              metadata: {
-                collectionId: collectionId.toString(),
-                type: 'processed_csv',
-                processedAt: processingTimestamp
-              }
-            }
-          });
-
-          stream.on('error', reject);
-            stream.on('finish', () => {
-              logger.info(`Uploaded CSV to Cloud Storage: ${csvFileName}`);
-              resolve({
-                fileName: csvFileName,
-                type: 'csv',
-                url: `gs://${config.outputBucket}/${csvFileName}`
-              });
-            });
-
-          stream.end(csvBuffer);
-        });
-
-        uploadPromises.push(csvUpload);
-      }
-
-      // Upload Excel
-      if (excelBuffer) {
-        const excelFileName = `${collectionId}/processed_data_${processingTimestamp}.xlsx`;
-        const excelFile = outputBucket.file(excelFileName);
-        
-        const excelUpload = new Promise((resolve, reject) => {
-          const stream = excelFile.createWriteStream({
-            metadata: {
-              contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-              metadata: {
-                collectionId: collectionId.toString(),
-                type: 'processed_excel',
-                processedAt: processingTimestamp
-              }
-            }
-          });
-
-          stream.on('error', reject);
-          stream.on('finish', () => {
-            logger.info(`Uploaded Excel to Cloud Storage: ${excelFileName}`);
-            resolve({
-              fileName: excelFileName,
-              type: 'excel',
-              url: `gs://${config.outputBucket}/${excelFileName}`
-            });
-          });
-
-          stream.end(excelBuffer);
-        });
-
-        uploadPromises.push(excelUpload);
-      }
-
-      const results = await Promise.all(uploadPromises);
-      uploadedFiles.push(...results);
-
-    } catch (error) {
-      logger.error('Error uploading processed data:', error);
-      throw error;
-    }
-
-    return uploadedFiles;
-  }
-
-  // Generate signed URL for file download
-  static async generateSignedUrl(fileName, expirationMinutes = 60) {
-    try {
-      const file = outputBucket.file(fileName);
-      const [signedUrl] = await file.getSignedUrl({
-        action: 'read',
-        expires: Date.now() + expirationMinutes * 60 * 1000,
-      });
-      return signedUrl;
-    } catch (error) {
-      logger.error('Error generating signed URL:', error);
-      throw error;
-    }
-  }
-
-  // List files in a collection
-  static async listCollectionFiles(collectionId) {
-    try {
-      const [files] = await outputBucket.getFiles({
-        prefix: `${collectionId}/`,
-      });
-      
-      return files.map(file => ({
-        name: file.name,
-        size: file.metadata.size,
-        created: file.metadata.timeCreated,
-        url: `gs://${config.outputBucket}/${file.name}`
-      }));
-    } catch (error) {
-      logger.error('Error listing collection files:', error);
-      throw error;
-    }
-  }
-
-  // Delete file from Cloud Storage
-  static async deleteFile(fileName) {
-    try {
-      await outputBucket.file(fileName).delete();
-      logger.info(`Deleted file from Cloud Storage: ${fileName}`);
-    } catch (error) {
-      logger.error('Error deleting file:', error);
-      throw error;
-    }
-  }
-
-  static async downloadFile(fileName) {
     const tempDir = path.join(process.cwd(), "temp");
     if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
-    const tempPath = path.join(tempDir, path.basename(fileName));
+    const tempPath = path.join(tempDir, path.basename(name));
+
     try {
-      await outputBucket.file(fileName).download({ destination: tempPath });
+      await storage.bucket(bucket).file(name).download({ destination: tempPath });
       return tempPath;
     } catch (error) {
       logger.error('Error downloading file:', error);
       throw error;
     }
+  }
+  
+  /**
+   * Parses a GCS path into its bucket and name components.
+   * @param {string} gcsPath - The GCS path.
+   * @returns {{bucket: string, name: string}}
+   */
+  static parseGcsPath(gcsPath) {
+    if (!gcsPath || !gcsPath.startsWith('gs://')) {
+      logger.error(`Invalid GCS path format: ${gcsPath}`);
+      return { bucket: null, name: null };
+    }
+    const [bucket, ...nameParts] = gcsPath.substring(5).split('/');
+    return { bucket, name: nameParts.join('/') };
   }
 }

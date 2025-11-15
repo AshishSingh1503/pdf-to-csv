@@ -15,8 +15,8 @@ cache.on('expired', (key, value) => {
 export const KEYS = {
   CUSTOMERS_ALL: 'customers:all',
   CUSTOMER_BY_ID: (id) => `customer:${id}`,
-  COLLECTIONS_ALL: (customerId) => `collections:all:${customerId || 'all'}`,
-  COLLECTIONS_ALL_GLOBAL: 'collections:all:all',
+  COLLECTIONS_ALL: (customerId, status = 'active') => `collections:all:${customerId || 'all'}:${status}`,
+  COLLECTIONS_ALL_GLOBAL: 'collections:all:all:active',
   COLLECTION_BY_ID: (id) => `collection:${id}`,
   COLLECTION_STATS: (id) => `collection:${id}:stats`,
 };

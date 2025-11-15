@@ -1,13 +1,13 @@
-import React, { createContext, useContext, useEffect, useState, useRef } from 'react';
-
-const ThemeContext = createContext();
+import React, { useEffect, useState, useRef } from 'react';
+import ThemeContext from './themeContext'
 
 export const ThemeProvider = ({ children }) => {
   // theme: 'light' | 'dark' | 'system' (persisted)
   const [theme, setTheme] = useState(() => {
     try {
       return localStorage.getItem('theme') || 'system';
-    } catch (e) {
+    } catch (_e) {
+      void _e; // Intentionally ignore localStorage access errors (e.g., private browsing)
       return 'system';
     }
   });
@@ -21,7 +21,8 @@ export const ThemeProvider = ({ children }) => {
         return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
       }
       return t === 'dark' ? 'dark' : 'light';
-    } catch (e) {
+    } catch (_e) {
+      void _e; // Ignore matchMedia/localStorage errors and fall back to light
       return 'light';
     }
   });
@@ -33,8 +34,8 @@ export const ThemeProvider = ({ children }) => {
     if (typeof window === 'undefined') return;
     try {
       localStorage.setItem('theme', theme);
-    } catch (e) {
-      // ignore
+    } catch (_e) {
+      void _e; /* Intentionally ignore localStorage write errors (e.g., quota/private mode) */
     }
   }, [theme]);
 
@@ -72,7 +73,9 @@ export const ThemeProvider = ({ children }) => {
       try {
         if (mq && typeof mq.removeEventListener === 'function') mq.removeEventListener('change', listener);
         else if (mq && typeof mq.removeListener === 'function') mq.removeListener(listener);
-      } catch (e) {}
+      } catch (_e) {
+        void _e; /* Intentionally ignore matchMedia cleanup errors */
+      }
     };
   }, [theme]);
 
@@ -100,8 +103,4 @@ export const ThemeProvider = ({ children }) => {
   );
 };
 
-export const useTheme = () => {
-  return useContext(ThemeContext);
-};
-
-export default ThemeContext;
+// Note: `useTheme` hook has been moved to `useTheme.js` to avoid mixing hooks with provider

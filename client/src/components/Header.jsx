@@ -1,6 +1,6 @@
 import React from "react";
 import CollectionSelector from "./CollectionSelector";
-import { useTheme } from "../contexts/ThemeContext";
+import { useTheme } from "../contexts/useTheme";
 
 const Header = ({ customer, onUploadClick, selectedCollection, onToggleSidebar, onToggleCustomersSidebar }) => {
   const { effectiveTheme, toggleTheme } = useTheme();
@@ -13,7 +13,7 @@ const Header = ({ customer, onUploadClick, selectedCollection, onToggleSidebar, 
           {/* Customers toggle (visible on small screens) */}
           <button
             onClick={onToggleCustomersSidebar}
-            className="sm:hidden bg-transparent text-slate-700 dark:text-slate-200 px-2 py-1 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-blue-500 active:scale-95 transition-transform"
+            className="bg-transparent text-slate-700 dark:text-slate-200 px-2 py-1 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-blue-500 active:scale-95 transition-transform"
             aria-label="Toggle customers sidebar"
           >
             Customers

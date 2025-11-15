@@ -14,7 +14,7 @@ spec:
         run.googleapis.com/cpu-throttling: "false"
     spec:
       containerConcurrency: 100
-      timeoutSeconds: 300
+      timeoutSeconds: 1800
       containers:
       - image: gcr.io/pdf2csv-475708/pdf2csv-backend:latest
         ports:
@@ -31,7 +31,7 @@ spec:
         - name: PROCESSOR_ID
           value: "9f82bf3d2a02e2ab"
         - name: DB_HOST
-          value: "10.0.0.3"  # Cloud SQL private IP
+          value: "/cloudsql/pdf2csv-475708:us-central1:pdf2csv-instance"
         - name: DB_PORT
           value: "5432"
         - name: DB_NAME
@@ -51,13 +51,34 @@ spec:
           value: "pdf-data-extraction-output-bucket"
         - name: STORAGE_LOCATION
           value: "us"
+        - name: MAX_CONCURRENT_BATCHES
+          value: "20"
+        - name: BATCH_QUEUE_TIMEOUT
+          value: "1800000"
+        - name: MAX_QUEUE_LENGTH
+          value: "500"
+        - name: DB_POOL_MAX
+          value: "500"
+        - name: WORKER_THREAD_POOL_SIZE
+          value: "16"
+        - name: DB_INSERT_CHUNK_SIZE
+          value: "5000"
+        - name: ENABLE_DUPLICATE_DETECTION
+          value: "true"
+        
+      # Attach Cloud SQL instance to this Cloud Run service
+      # This annotation ensures the Cloud SQL socket is mounted and available at /cloudsql
+      # Replace with your actual connection name if different.
+      # Note: gcloud run deploy --set-cloudsql-instances also configures this for deployments via CLI.
+      annotations:
+        run.googleapis.com/cloudsql-instances: "pdf2csv-475708:us-central1:pdf2csv-instance"
         resources:
           limits:
-            cpu: "2"
-            memory: "4Gi"
+            cpu: "8"
+            memory: "32Gi"
           requests:
-            cpu: "1"
-            memory: "2Gi"
+            cpu: "4"
+            memory: "16Gi"
 ---
 apiVersion: serving.knative.dev/v1
 kind: Service

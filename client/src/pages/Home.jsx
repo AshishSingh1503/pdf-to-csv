@@ -11,7 +11,6 @@ import SearchBar from "../components/SearchBar";
 import DownloadButtons from "../components/DownloadButtons";
 import UploadedFilesSidebar from "../components/UploadedFilesSidebar";
 import ProgressBar from "../components/ProgressBar";
-import { useToast } from "../contexts/ToastContext";
 import { TableSkeleton } from "../components/SkeletonLoader";
 import EmptyState from "../components/EmptyState";
 
@@ -38,14 +37,13 @@ const Home = () => {
   const [currentBatch, setCurrentBatch] = useState(0);
   const [totalBatches, setTotalBatches] = useState(0);
   const [uploadStartTime, setUploadStartTime] = useState(null);
-  const { showSuccess, showError } = useToast();
 
   // ✅ Batch Upload Logic
   const handleUpload = async (newFiles, collectionId) => {
     if (!newFiles.length) return;
 
     if (!collectionId) {
-      showError("Please select a collection before uploading files");
+      console.error("Please select a collection before uploading files");
       return;
     }
 
@@ -55,7 +53,11 @@ const Home = () => {
       setCustomer({ name: customerName });
     }
 
-    const BATCH_SIZE = 25; // limit per upload batch
+  // Error handling strategy:
+  // - Sidebar shows real-time processing status via WebSocket (queue position, progress, completion)
+  // - Toast notifications only for: upload completion summary and actionable errors
+  // - Let sidebar be the primary source of truth for processing status
+  const BATCH_SIZE = 10; // limit per upload batch
     const fileChunks = [];
     for (let i = 0; i < newFiles.length; i += BATCH_SIZE) {
       fileChunks.push(newFiles.slice(i, i + BATCH_SIZE));
@@ -69,85 +71,82 @@ const Home = () => {
     setUploadProgress(0);
     setCurrentBatch(0);
 
-    try {
-      let abortedDueToCapacity = false;
-      for (let i = 0; i < fileChunks.length; i++) {
-        const batch = fileChunks[i];
-        setCurrentBatch(i + 1);
-        console.log(`Uploading batch ${i + 1}/${fileChunks.length}...`);
+  let abortedDueToCapacity = false;
+  let successfulBatches = 0;
+  let failedBatches = 0;
 
-        try {
-          const data = await uploadAndProcess(batch, collectionId, (progressEvent) => {
-            setUploadProgress(prev => {
-              try {
-                if (progressEvent && progressEvent.total && progressEvent.total > 0) {
-                  const pct = Math.round((progressEvent.loaded * 100) / progressEvent.total);
-                  return Math.max(0, Math.min(100, pct));
-                }
-                // Some XHR implementations may provide a fractional loaded (0-1)
-                if (progressEvent && typeof progressEvent.loaded === 'number' && progressEvent.loaded >= 0 && progressEvent.loaded <= 1) {
-                  return Math.max(0, Math.min(100, Math.round(progressEvent.loaded * 100)));
-                }
-              } catch (err) {
-                // fall through to return previous
-              }
-              return prev || 0;
-            });
-          });
+    for (let i = 0; i < fileChunks.length; i++) {
+      const batch = fileChunks[i];
+      setCurrentBatch(i + 1);
+      console.log(`Uploading batch ${i + 1}/${fileChunks.length}...`);
 
-          // If server accepted but returned queued position, surface a light notification so users know ETA
-          try {
-            if (data && data.position !== undefined && data.position > 0) {
-              const eta = data.estimatedWaitTime ? ` Estimated wait: ${data.estimatedWaitTime}s.` : '';
-              showSuccess(`Batch queued at position ${data.position}.${eta}`);
-            }
-          } catch (e) {
-            // ignore toast failures
-          }
-
-          // Optional pause between batches
-          await new Promise((resolve) => setTimeout(resolve, 1000));
-        } catch (err) {
-          // Axios-like error handling to detect HTTP 503 + queueFull responses
-          const resp = err && err.response;
-          if (resp && resp.status === 503) {
-            const d = resp.data || {};
-            const serverMsg = d.error || d.message || 'Server is at capacity. Please try again in a few minutes.';
-            let extra = '';
+      try {
+        await uploadAndProcess(batch, collectionId, (progressEvent) => {
+          setUploadProgress(prev => {
             try {
-              if (d.queueFull) {
-                if (d.estimatedWaitTime) extra = ` Estimated wait: ${d.estimatedWaitTime}s.`;
-                else if (typeof d.position === 'number') extra = ` Position: ${d.position}.`;
-                else if (typeof d.queueLength === 'number') extra = ` Queue length: ${d.queueLength}.`;
+              if (progressEvent && progressEvent.total && progressEvent.total > 0) {
+                const pct = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+                return Math.max(0, Math.min(100, pct));
               }
-            } catch (e) {}
+              if (progressEvent && typeof progressEvent.loaded === 'number' && progressEvent.loaded >= 0 && progressEvent.loaded <= 1) {
+                return Math.max(0, Math.min(100, Math.round(progressEvent.loaded * 100)));
+              }
+            } catch (_err) {
+              void _err;
+            }
+            return prev || 0;
+          });
+        });
 
-            showError(`Server busy: ${serverMsg}${extra}`);
-            // stop further batches and let the upload UI reset in finally
-            abortedDueToCapacity = true;
-            break;
-          }
-
-          // For other errors, rethrow so outer catch handles generic failures
-          throw err;
+        successfulBatches += 1;
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      } catch (err) {
+        failedBatches += 1;
+        const resp = err && err.response;
+        if (resp && resp.status === 503) {
+          const d = resp.data || {};
+          const serverMsg = d.error || d.message || 'Server is at capacity. Please try again in a few minutes.';
+          console.error(`Batch ${i + 1} rejected: ${serverMsg}`);
+          abortedDueToCapacity = true;
+          break; 
+        } else {
+          console.error(`Batch ${i + 1} failed to upload:`, err.message);
         }
       }
-
-      await fetchData();
-      if (!abortedDueToCapacity) {
-        showSuccess(`✅ Successfully uploaded ${newFiles.length} file(s) in ${fileChunks.length} batch(es).`);
-      } else {
-        // If aborted due to capacity, refresh UI and notify user they can retry later
-        showError('Upload paused: server at capacity. Some files may not have been queued. Please try again in a few minutes.');
-      }
-    } catch (error) {
-      console.error("Upload error:", error);
-      showError("❌ Failed to process some files. Please try again.");
-    } finally {
-      setLoading(false);
-      setUploadProgress(0);
-      setCurrentBatch(0);
     }
+
+    const uploadSuccessful = successfulBatches > 0 && failedBatches === 0;
+
+    // Refresh UI data independently of upload success; if fetch fails, warn but preserve upload success state
+    const willRefresh = uploadSuccessful || abortedDueToCapacity;
+    try {
+      // Only attempt to refresh if uploads completed or we aborted due to capacity (so UI needs update)
+      if (willRefresh) {
+        await fetchData();
+      }
+    } catch (err) {
+      // Don't surface a toast for refresh failures; sidebar (via WebSocket) is the single source of truth.
+      console.error('Failed to refresh data after upload:', err);
+    }
+
+    // Final user-facing notifications based on upload outcome
+    if (successfulBatches === fileChunks.length) {
+      console.log(`✅ All ${successfulBatches} batches uploaded successfully (${newFiles.length} files).`);
+    } else if (successfulBatches > 0) {
+      console.warn(`⚠️ Partial upload complete: ${successfulBatches} of ${fileChunks.length} batches succeeded, ${failedBatches} failed.`);
+    } else if (abortedDueToCapacity) {
+      console.error('❌ Upload rejected: Server at capacity. Please try again in a few minutes.');
+    } else {
+      console.error(`❌ Upload failed: All ${failedBatches} batches failed.`);
+    }
+
+    // Cleanup UI state. If we triggered a data refresh, let fetchData() manage loading
+    // to avoid brief flicker (it sets loading=true and clears it in its own finally).
+    if (!willRefresh) {
+      setLoading(false);
+    }
+    setUploadProgress(0);
+    setCurrentBatch(0);
   };
 
   const handleHeaderUploadClick = () => {
@@ -158,7 +157,7 @@ const Home = () => {
     const selectedFiles = [...e.target.files];
     if (selectedFiles.length > 0) {
       if (!selectedCollection) {
-        showError("Please select a collection before uploading files");
+        console.error("Please select a collection before uploading files");
         return;
       }
       handleUpload(selectedFiles, selectedCollection.id);
@@ -361,7 +360,15 @@ const Home = () => {
           onUploadClick={handleHeaderUploadClick}
           selectedCollection={selectedCollection}
           onToggleSidebar={() => setIsSidebarOpen(!isSidebarOpen)}
-          onToggleCustomersSidebar={() => setCustomersSidebarOpen(prev => !prev)}
+          onToggleCustomersSidebar={() => {
+            try {
+              if (typeof window !== 'undefined' && window.matchMedia('(min-width: 1024px)').matches) {
+                // desktop - no-op to avoid confusing users (sidebar is always visible on desktop)
+                return;
+              }
+            } catch (_e) { void _e; }
+            setCustomersSidebarOpen(prev => !prev)
+          }}
         />
 
         <main className="flex-1 overflow-y-auto">
@@ -405,7 +412,7 @@ const Home = () => {
                 <ProgressBar
                   progress={uploadProgress}
                   showPercentage={true}
-                  label={currentBatch > 0 ? `Batch ${currentBatch} of ${totalBatches}` : 'Uploading'}
+                  label={currentBatch > 0 ? `Batch ${currentBatch} of ${totalBatches}` : 'processing'}
                   estimatedTimeRemaining={uploadStartTime && currentBatch > 0 ? Math.round(((Date.now() - uploadStartTime) / currentBatch) * (totalBatches - currentBatch) / 1000) : null}
                 />
               </div>
@@ -451,6 +458,7 @@ const Home = () => {
         isOpen={isSidebarOpen}
         onClose={() => setIsSidebarOpen(false)}
         selectedCollection={selectedCollection}
+        onRefresh={fetchData}
         currentBatch={currentBatch}
         totalBatches={totalBatches}
       />

@@ -183,6 +183,25 @@ export const initializeDatabase = async () => {
       CREATE INDEX IF NOT EXISTS idx_file_metadata_batch_id ON file_metadata(batch_id)
     `);
 
+    // Add cloud_storage_path_raw and cloud_storage_path_processed columns if they don't exist
+    await query(`
+      ALTER TABLE file_metadata
+      ADD COLUMN IF NOT EXISTS cloud_storage_path_raw VARCHAR(500),
+      ADD COLUMN IF NOT EXISTS cloud_storage_path_processed VARCHAR(500)
+    `);
+
+    // Backfill cloud_storage_path_raw from the existing cloud_storage_path column
+    await query(`
+      UPDATE file_metadata
+      SET cloud_storage_path_raw = cloud_storage_path
+      WHERE cloud_storage_path_raw IS NULL AND cloud_storage_path IS NOT NULL
+    `);
+    
+    // Create index on the new raw path column
+    await query(`
+      CREATE INDEX IF NOT EXISTS idx_file_metadata_raw_path ON file_metadata(cloud_storage_path_raw)
+    `);
+
     // Add full_name column to post_process_records if it doesn't exist
     await query(`
       ALTER TABLE post_process_records
