@@ -21,36 +21,58 @@ export class CloudStorageService {
    * @param {string} batchId - The ID of the batch.
    * @returns {Promise<string>} The full GCS path of the uploaded file.
    */
-  static async uploadRawFile(file, collectionId, batchId) {
-    const fileName = `raw/${collectionId}/${batchId}/${file.name}`;
-    const fileUpload = outputBucket.file(fileName);
-
-    return new Promise((resolve, reject) => {
-      const stream = fileUpload.createWriteStream({
-        metadata: {
-          contentType: file.mimetype || 'application/pdf',
-          metadata: {
-            originalName: file.name,
-            collectionId: collectionId.toString(),
-            batchId: batchId,
-          },
-        },
-      });
-
-      stream.on('error', (error) => {
-        logger.error(`Upload error for ${file.name}:`, error);
-        reject(error);
-      });
-
-      stream.on('finish', () => {
-        const gcsPath = `gs://${config.outputBucket}/${fileName}`;
-        logger.info(`Uploaded raw file ${file.name} to ${gcsPath}`);
-        resolve(gcsPath);
-      });
-
-      stream.end(file.data);
-    });
-  }
+ static async uploadRawFile(file, collectionId, batchId) {  
+   const fileName = `raw/${collectionId}/${batchId}/${file.name}`;  
+   const fileUpload = outputBucket.file(fileName);  
+   
+   return new Promise((resolve, reject) => {  
+     const stream = fileUpload.createWriteStream({  
+       metadata: {  
+         contentType: file.mimetype || 'application/pdf',  
+         metadata: {  
+           originalName: file.name,  
+           collectionId: collectionId.toString(),  
+           batchId: batchId,  
+         },  
+       },  
+     });  
+   
+     stream.on('error', (error) => {  
+       // Enhanced error logging  
+       logger.error(`Upload error for ${file.name}:`, {  
+         error: error.message,  
+         code: error.code,  
+         fileName: fileName,  
+         fileSize: file.size,  
+         bucket: config.outputBucket,  
+         collectionId: collectionId,  
+         batchId: batchId,  
+         stack: error.stack  
+       });  
+       reject(error);  
+     });  
+   
+     stream.on('finish', () => {  
+       const gcsPath = `gs://${config.outputBucket}/${fileName}`;  
+       logger.info(`Uploaded raw file ${file.name} to ${gcsPath}`);  
+       resolve(gcsPath);  
+     });  
+   
+     // Add validation before writing  
+     if (!file.data || file.data.length === 0) {  
+       const error = new Error(`File ${file.name} has no data or is empty`);  
+       logger.error('Invalid file data:', {  
+         fileName: file.name,  
+         hasData: !!file.data,  
+         dataLength: file.data?.length || 0  
+       });  
+       reject(error);  
+       return;  
+     }  
+   
+     stream.end(file.data);  
+   });  
+ }
 
   /**
    * Uploads processed output files (like JSON) to GCS under the 'processed/' prefix.

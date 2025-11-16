@@ -69,3 +69,4 @@ config.env
 
 # Archive folder (legacy code kept for reference)
 # archive/
+/server/logs
