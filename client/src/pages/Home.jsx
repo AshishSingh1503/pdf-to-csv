@@ -153,15 +153,33 @@ const Home = () => {
     fileInputRef.current.click();
   };
 
-  const handleFileChange = (e) => {
-    const selectedFiles = [...e.target.files];
-    if (selectedFiles.length > 0) {
-      if (!selectedCollection) {
-        console.error("Please select a collection before uploading files");
-        return;
-      }
-      handleUpload(selectedFiles, selectedCollection.id);
-    }
+  const handleFileChange = (e) => {  
+    const selectedFiles = [...e.target.files];  
+      
+    // Filter out directories (they have empty type and zero size)  
+    const validFiles = selectedFiles.filter(file => {  
+      const isValid = file.type !== "" || file.size > 0;  
+      if (!isValid) {  
+        console.warn(`Skipping invalid file/directory: ${file.name}`);  
+      }  
+      return isValid;  
+    });  
+      
+    if (validFiles.length === 0) {  
+      console.error("No valid PDF files selected");  
+      return;  
+    }  
+      
+    if (validFiles.length !== selectedFiles.length) {  
+      console.warn(`Filtered out ${selectedFiles.length - validFiles.length} invalid items`);  
+    }  
+      
+    if (!selectedCollection) {  
+      console.error("Please select a collection before uploading files");  
+      return;  
+    }  
+      
+    handleUpload(validFiles, selectedCollection.id);  
   };
 
   const fetchData = useCallback(async () => {
@@ -373,13 +391,14 @@ const Home = () => {
 
         <main className="flex-1 overflow-y-auto">
           <div className="p-4">
-            <input
-              type="file"
-              multiple
-              accept=".pdf"
-              onChange={handleFileChange}
-              ref={fileInputRef}
-              className="hidden"
+            <input  
+              type="file"  
+              multiple  
+              accept=".pdf,application/pdf"  
+              onChange={handleFileChange}  
+              ref={fileInputRef}  
+              className="hidden"  
+              webkitdirectory={false}  
             />
 
             <SearchBar
