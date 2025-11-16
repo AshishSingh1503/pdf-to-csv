@@ -1,6 +1,9 @@
 // server/src/models/FileMetadata.js
 import { query } from './database.js';
 
+import { CloudStorageService } from '../services/cloudStorage.js';
+import logger from '../utils/logger.js';
+
 export class FileMetadata {
   constructor(data) {
     this.id = data.id;
@@ -163,6 +166,17 @@ export class FileMetadata {
 
   // Delete files by collection ID
   static async deleteByCollectionId(collectionId) {
+    const files = await this.findByCollectionId(collectionId);
+
+    for (const file of files) {
+      if (file.cloud_storage_path_raw) {
+        try {
+          await CloudStorageService.deleteFile(file.cloud_storage_path_raw);
+        } catch (error) {
+          logger.error(`Failed to delete file from GCS: ${file.cloud_storage_path_raw}`, error);
+        }
+      }
+    }
     const result = await query(
       'DELETE FROM file_metadata WHERE collection_id = $1',
       [collectionId]

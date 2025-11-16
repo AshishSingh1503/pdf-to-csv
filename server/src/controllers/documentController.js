@@ -343,12 +343,12 @@ export const processDocuments = async (req, res) => {
       position,
       message: position === 0 ? `Successfully uploaded ${fileArray.length} file(s). Processing started.` : `Successfully uploaded ${fileArray.length} file(s). Queued at position ${position}.`,
     }
-    if (queueStatus) {
-      responsePayload.queueLength = queueStatus.queueLength
-      responsePayload.availableSlots = queueStatus.availableSlots
-      responsePayload.averageWaitTimeSeconds = queueStatus.averageWaitTimeSeconds
-      responsePayload.estimatedWaitTime = (typeof position === 'number') ? batchQueueManager.estimateWaitTime(position) : null
-    }
+    // if (queueStatus) {
+    //   responsePayload.queueLength = queueStatus.queueLength
+    //   responsePayload.availableSlots = queueStatus.availableSlots
+    //   responsePayload.averageWaitTimeSeconds = queueStatus.averageWaitTimeSeconds
+    //   responsePayload.estimatedWaitTime = (typeof position === 'number') ? batchQueueManager.estimateWaitTime(position) : null
+    // }
     res.json(responsePayload)
 
   } catch (err) {
@@ -538,18 +538,24 @@ const processPDFFilesParallel = async (fileArray, collectionIdNum, fileMetadatas
             }
 
             // Now that DB and processed file uploads are successful, conditionally delete the raw file.
+            await meta.updateStatus('completed');
+
+            // Now that DB and processed file uploads are successful, conditionally delete the raw file.
             if (config.deleteRawAfterProcess) {
-                try {
-                    await CloudStorageService.deleteFile(meta.cloud_storage_path_raw);
-                    logger.info(`Successfully deleted raw PDF: ${meta.cloud_storage_path_raw}`);
-                    // Nullify the path in the database after successful deletion
-                    await meta.updateCloudStoragePathRaw(null);
-                } catch (deleteError) {
-                    logger.error(`Failed to delete raw PDF ${meta.cloud_storage_path_raw}. Please check GCS permissions.`, deleteError);
-                    await meta.updateStatus('error_delete');
+                if (meta.cloud_storage_path_raw) {
+                    try {
+                        await CloudStorageService.deleteFile(meta.cloud_storage_path_raw);
+                        logger.info(`Successfully deleted raw PDF: ${meta.cloud_storage_path_raw}`);
+                        // Nullify the path in the database after successful deletion
+                        await meta.updateCloudStoragePathRaw(null);
+                    } catch (deleteError) {
+                        logger.error(`Failed to delete raw PDF ${meta.cloud_storage_path_raw}. Please check GCS permissions.`, deleteError);
+                        await meta.updateStatus('error_delete');
+                    }
+                } else {
+                    logger.warn(`Could not delete raw PDF for file ${meta.original_filename} because cloud_storage_path_raw is missing.`);
                 }
             }
-            await meta.updateStatus('completed');
         } catch (postProcessError) {
             logger.error(`Error during post-processing for file ${meta.original_filename}`, postProcessError);
             await meta.updateStatus('error_processed_upload');
@@ -746,12 +752,12 @@ export const reprocessFile = async (req, res) => {
     }
 
     if (!fileMetadata.cloud_storage_path_raw) {
-        return res.status(409).json({ error: 'Raw PDF path not found - cannot reprocess.' });
+        return res.status(409).json({ error: 'Raw PDF deleted — cannot reprocess' });
     }
 
     const rawFileExists = await CloudStorageService.fileExists(fileMetadata.cloud_storage_path_raw);
     if (!rawFileExists) {
-      return res.status(409).json({ error: 'Raw PDF deleted - cannot reprocess.' });
+      return res.status(409).json({ error: 'Raw PDF deleted — cannot reprocess' });
     }
     
     await fileMetadata.updateStatus('reprocessing');
@@ -854,7 +860,7 @@ export const downloadFile = (req, res) => {
 
 // FIXED: Excel Download with Proper Formatting
 
-const downloadCollectionFile = async (req, res, fileType) => {
+export const downloadCollectionFile = async (req, res, fileType) => {
   try {
     const { collectionId } = req.params;
     const { type } = req.query;
@@ -893,7 +899,10 @@ const downloadCollectionFile = async (req, res, fileType) => {
           // Convert all values to strings to prevent Excel formatting issues
           if (value === null || value === undefined) {
             formatted[key] = '';
-          } else if (typeof value === 'number') {
+          } else if (key === 'mobile') {
+            formatted[key] = String(value);
+          }
+          else if (typeof value === 'number') {
             // Force numbers to be strings (prevent scientific notation for mobile, prevent #### for dates)
             formatted[key] = String(value);
           } else {

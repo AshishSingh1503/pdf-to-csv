@@ -109,7 +109,7 @@ export const config = {
   // Runtime & tuning
   logLevel: process.env.LOG_LEVEL || 'info',
   // Default to 16 worker threads for high-resource environment (8 vGPU/64GB). Override with WORKER_THREAD_POOL_SIZE env var if needed.
-  workerThreadPoolSize: parseInt(process.env.WORKER_THREAD_POOL_SIZE, 10) || 16,
+  workerThreadPoolSize: parseInt(process.env.WORKER_THREAD_POOL_SIZE, 10) || 4,
   cacheTtlSeconds: parseInt(process.env.CACHE_TTL, 10) || 300,
   wsPath: process.env.WS_PATH || '/ws',
   // Batch Queue configuration
