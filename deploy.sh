@@ -40,10 +40,13 @@ gcloud run deploy pdf2csv-backend \
   --region $REGION \
   --allow-unauthenticated \
   --service-account $SERVICE_ACCOUNT \
-  --set-env-vars="NODE_ENV=production,PROJECT_ID=$PROJECT_ID,LOCATION=us,PROCESSOR_ID=9f82bf3d2a02e2ab,OUTPUT_BUCKET=pdf-data-extraction-output-bucket,STORAGE_LOCATION=us,DELETE_RAW_AFTER_PROCESS=false,DB_HOST=/cloudsql/pdf2csv-475708:us-central1:pdf2csv-instance,DB_PORT=5432,DB_NAME=pdf2csv_db,DB_USER=805037964827-compute@developer,DB_SSL=true,MAX_CONCURRENT_BATCHES=20,BATCH_QUEUE_TIMEOUT=1800000,MAX_QUEUE_LENGTH=500,DB_POOL_MAX=500,WORKER_THREAD_POOL_SIZE=16,DB_INSERT_CHUNK_SIZE=5000,ENABLE_DUPLICATE_DETECTION=true" \
+  --set-env-vars="NODE_ENV=production,PROJECT_ID=$PROJECT_ID,LOCATION=us,PROCESSOR_ID=9f82bf3d2a02e2ab,OUTPUT_BUCKET=pdf-data-extraction-output-bucket,STORAGE_LOCATION=us,DELETE_RAW_AFTER_PROCESS=false,DB_HOST=/cloudsql/pdf2csv-475708:us-central1:pdf2csv-instance,DB_PORT=5432,DB_NAME=pdf2csv_db,DB_USER=805037964827-compute@developer,DB_SSL=true,MAX_CONCURRENT_BATCHES=5,BATCH_QUEUE_TIMEOUT=1800000,MAX_QUEUE_LENGTH=500,DB_POOL_MAX=50,WORKER_THREAD_POOL_SIZE=4,DB_INSERT_CHUNK_SIZE=5000,ENABLE_DUPLICATE_DETECTION=true" \
   --set-cloudsql-instances="pdf2csv-475708:us-central1:pdf2csv-instance" \
-  --memory=32Gi \
-  --cpu=8 \
+  --memory=4Gi \
+  --cpu=2 \
+  --concurrency=200 \
+  --min-instances=1 \
+  --max-instances=10 \
   --timeout=1800
 
 # 6. Get backend URL and derive WS_URL
