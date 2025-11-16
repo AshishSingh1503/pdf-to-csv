@@ -255,10 +255,18 @@ export const processDocuments = async (req, res) => {
         await metadata.updateCloudStoragePathRaw(rawGcsPath);
         await metadata.updateStatus('processing'); // Now ready for processing
         return metadata;
-      } catch (uploadError) {
-        logger.error(`Failed to upload raw file ${file.name} for batch ${batchId}.`, uploadError);
-        await metadata.updateStatus('failed'); // Mark as failed if upload fails
-        return null; // Indicates failure
+      } catch (uploadError) {  
+        logger.error(`Failed to upload raw file ${file.name} for batch ${batchId}.`, {  
+          error: uploadError.message,  
+          code: uploadError.code,  
+          fileName: file.name,  
+          fileSize: file.size,  
+          collectionId: collectionIdNum,  
+          batchId: batchId,  
+          stack: uploadError.stack  
+        });  
+        await metadata.updateStatus('failed');  
+        return null;  
       }
     });
 
