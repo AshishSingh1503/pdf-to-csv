@@ -46,12 +46,16 @@ const MAX_CONCURRENT_REQUESTS = 150; // Hard cap for in-flight Document AI reque
 
 
 try {
-  const clientConfig = process.env.NODE_ENV === 'production' ? {} : { keyFilename: config.credentials };
+  const clientConfig = {};
+  if (process.env.NODE_ENV !== 'production') {
+    clientConfig.keyFilename = config.credentials;
+  }
   client = new DocumentProcessorServiceClient(clientConfig);
   logger.info('Document AI client initialized successfully');
 } catch (error) {
   logger.error("Failed to initialize Document AI client:", error);
-  throw new Error("Failed to initialize Document AI client. Please check your Google Cloud credentials.");
+  // Do not throw here, as it can crash the server on startup.
+  // The error will be handled in processPDFs.
 }
 
 

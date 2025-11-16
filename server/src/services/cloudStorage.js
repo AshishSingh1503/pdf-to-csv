@@ -6,10 +6,15 @@ import path from 'path';
 import fs from 'fs';
 
 // Initialize Cloud Storage client
-const storage = new Storage({
-  keyFilename: config.credentials,
+const storageConfig = {
   projectId: config.projectId,
-});
+};
+
+if (process.env.NODE_ENV !== 'production') {
+  storageConfig.keyFilename = config.credentials;
+}
+
+const storage = new Storage(storageConfig);
 
 const outputBucket = storage.bucket(config.outputBucket);
 
