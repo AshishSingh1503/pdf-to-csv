@@ -7,6 +7,8 @@ import EmptyState from './EmptyState'
 
 const ReprocessButton = ({ file, onReprocess }) => {
   const [isReprocessing, setIsReprocessing] = useState(false);
+  const [isButtonDisabled, setIsButtonDisabled] = useState(false);
+  const [tooltipText, setTooltipText] = useState('Reprocess this file');
 
   const handleReprocessClick = async (e) => {
     e.stopPropagation();
@@ -15,6 +17,10 @@ const ReprocessButton = ({ file, onReprocess }) => {
     try {
       await onReprocess(file.id);
     } catch (error) {
+      if (error.response && error.response.status === 409) {
+        setTooltipText('Raw PDF removed — reprocess unavailable.');
+        setIsButtonDisabled(true);
+      }
       console.error(`Reprocessing failed for file ${file.id}:`, error);
       // Optionally show a toast or message to the user
     } finally {
@@ -22,19 +28,13 @@ const ReprocessButton = ({ file, onReprocess }) => {
     }
   };
 
-  const isTerminalStatus = file.processing_status === 'completed' || file.processing_status === 'failed';
-  const canReprocess = isTerminalStatus && file.cloud_storage_path_raw;
-  const tooltipText = !isTerminalStatus
-    ? 'File must be in a "completed" or "failed" state to reprocess.'
-    : !file.cloud_storage_path_raw
-    ? 'Raw PDF removed - reprocess unavailable.'
-    : 'Reprocess this file';
+  const canReprocess = (file.processing_status === 'failed' || file.processing_status === 'processing') && file.cloud_storage_path_raw;
 
   return (
     <div className="relative group">
       <button
         onClick={handleReprocessClick}
-        disabled={!canReprocess || isReprocessing}
+        disabled={!canReprocess || isReprocessing || isButtonDisabled}
         className={`px-2 py-1 text-xs font-semibold rounded ${
           canReprocess
             ? 'bg-blue-100 text-blue-700 hover:bg-blue-200 dark:bg-blue-900/30 dark:text-blue-300 dark:hover:bg-blue-900/50'

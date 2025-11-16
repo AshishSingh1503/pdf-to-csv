@@ -15,7 +15,7 @@ import { promises as fsPromises } from "fs";
 
 
 // --- CONFIGURATION & CONSTANTS ---
-const SAFE_MAX_WORKERS = 150; // Upper bound for high-resource environment (8 vGPU/64GB) - allows aggressive parallelization
+const SAFE_MAX_WORKERS = 24; // Upper bound for high-resource environment (8 vGPU/64GB) - allows aggressive parallelization
 const BASE_WORKER_THREAD_POOL = Number(config.workerThreadPoolSize) || Math.max(2, Math.min(os.cpus().length, 16)); // configurable base pool size
 const MAX_PDF_SIZE_BYTES = 50 * 1024 * 1024; // 50MB warning threshold
 const PDF_SIZE_WARN_BYTES = 30 * 1024 * 1024; // 30MB soft limit
@@ -224,7 +224,7 @@ const parseFullName = (fullName) => {
 
     return { first: firstName, last: lastName };
   } catch (error) {
-    logger.error(`Name parser error for "${fullName}":`, error.message);
+    // logger.error(`Name parser error for "${fullName}":`, error.message);
     // Emergency fallback to manual parsing
     const parts = fullName.trim().split(/\s+/);
     return {
