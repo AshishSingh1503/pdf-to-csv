@@ -152,7 +152,7 @@ const Home = () => {
   const handleHeaderUploadClick = () => {
     fileInputRef.current.click();
   };
-
+  
   const handleFileChange = (e) => {  
     const selectedFiles = [...e.target.files];  
       
