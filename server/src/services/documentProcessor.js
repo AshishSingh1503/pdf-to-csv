@@ -1,9 +1,6 @@
-// server/src/services/documentProcessor.js
 import { DocumentProcessorServiceClient } from "@google-cloud/documentai";
-import Parser from "name-parser";
-import { config } from "../config/index.js";
-import logger from '../utils/logger.js';
-import fs from "fs";
+import config from "../config/config.js";
+import logger from "../utils/logger.js";
 import path from "path";
 import pLimit from "p-limit";
 import { Worker } from "worker_threads";
@@ -67,7 +64,7 @@ const REGEX_PATTERNS = {
   addressStatePostcodeMiddle: /^(.+?)\s+([A-Za-z]{2,3})\s+(\d{4})\s+(.+)$/i,
   addressStatePostcodeAny: /([A-Za-z]{2,3})\s+(\d{4})/i,
   nameInvalidChars: /[^A-Za-zÀ-ÖØ-öø-ÿ'\-\s]/g,
-  nameSpecialChars: /�|･･･|…|•|\u2026/g,
+  nameSpecialChars: /|･･･|…|•|\u2026/g,
   dateInvalidChars: /[^0-9A-Za-z\s\-\/]/g,
   dateFormat: /^(\d{1,2})([A-Za-z]{3,})(\d{4})$/,
   dashNormalize: /[-\u2013\u2014]+/g,
@@ -238,6 +235,7 @@ const parseFullName = (fullName) => {
   }
 };
 
+
 const extractEntitiesSimple = (document) => {
   const raw = document.entities || [];
   return raw.map((entity, idx) => {
@@ -265,13 +263,15 @@ const extractEntitiesSimple = (document) => {
     // --- NEW: Extract Bounding Box Coordinates ---
     let midY = null;
     let midX = null;
+    let minY = null;
+    let maxY = null;
     try {
       const vertices = entity.pageAnchor?.pageRefs?.[0]?.boundingPoly?.normalizedVertices;
       if (vertices && vertices.length >= 4) {
         const ys = vertices.map(v => v.y || 0);
         const xs = vertices.map(v => v.x || 0);
-        const minY = Math.min(...ys);
-        const maxY = Math.max(...ys);
+        minY = Math.min(...ys);
+        maxY = Math.max(...ys);
         const minX = Math.min(...xs);
         midY = (minY + maxY) / 2;
         midX = minX;
@@ -289,6 +289,8 @@ const extractEntitiesSimple = (document) => {
       endIndex: Number.isFinite(endIndex) ? endIndex : null,
       midY,
       midX,
+      minY,
+      maxY,
       // keep original raw entity for debugging if needed
       __raw: entity,
       __order: idx
@@ -299,8 +301,6 @@ const extractEntitiesSimple = (document) => {
 
 const simpleGrouping = (entities) => {
   if (!Array.isArray(entities) || entities.length === 0) return [];
-  const ROW_Y_TOLERANCE = 0.01;
-
 
   const pureStartIndexGrouping = (entitySubset) => {
     // This is the original fallback logic, to be used when coordinate data is insufficient
@@ -336,36 +336,58 @@ const simpleGrouping = (entities) => {
   };
 
 
-  const withCoords = entities.filter(e => e.midY !== null && e.midX !== null);
-  const withoutCoords = entities.filter(e => e.midY === null || e.midX === null);
+  const withCoords = entities.filter(e => e.minY != null && e.maxY != null);
+  const withoutCoords = entities.filter(e => e.minY == null || e.maxY == null);
 
 
   if (withCoords.length / entities.length < 0.5) {
     logger.debug('Insufficient coordinate data. Using pure startIndex grouping.');
     return pureStartIndexGrouping(entities);
   }
-  logger.debug('Using hybrid coordinate/startIndex grouping.');
+  logger.debug('Using overlap-based coordinate grouping.');
 
 
-  // 1. Form rows from entities that have coordinates
-  const sortedWithCoords = withCoords.sort((a, b) => a.midY - b.midY || a.midX - b.midX);
+  // --- NEW: Overlap-Based Grouping Logic ---
+  // 1. Sort by Y coordinate (top to bottom)
+  const sortedWithCoords = withCoords.sort((a, b) => a.minY - b.minY);
   const rows = [];
-  if (sortedWithCoords.length > 0) {
-    let currentRow = [sortedWithCoords[0]];
-    for (let i = 1; i < sortedWithCoords.length; i++) {
-      const curr = sortedWithCoords[i];
-      if (Math.abs(curr.midY - currentRow[0].midY) < ROW_Y_TOLERANCE) {
-        currentRow.push(curr);
-      } else {
-        rows.push(currentRow);
-        currentRow = [curr];
+
+  for (const entity of sortedWithCoords) {
+    let placed = false;
+
+    // Try to fit into an existing row
+    for (const row of rows) {
+      // Calculate row bounds
+      const rowMinY = Math.min(...row.map(e => e.minY));
+      const rowMaxY = Math.max(...row.map(e => e.maxY));
+      const rowHeight = rowMaxY - rowMinY;
+
+      // Entity bounds
+      const entHeight = entity.maxY - entity.minY;
+
+      // Calculate overlap
+      const intersectionStart = Math.max(rowMinY, entity.minY);
+      const intersectionEnd = Math.min(rowMaxY, entity.maxY);
+      const intersectionHeight = Math.max(0, intersectionEnd - intersectionStart);
+
+      // Overlap threshold: 30% of the smaller height
+      const minHeight = Math.min(rowHeight, entHeight);
+
+      // If we have significant overlap, add to row
+      if (intersectionHeight > 0.3 * minHeight) {
+        row.push(entity);
+        placed = true;
+        break;
       }
     }
-    rows.push(currentRow);
+
+    // If not placed, start a new row
+    if (!placed) {
+      rows.push([entity]);
+    }
   }
 
-
-  // 2. Create a map of row boundaries based on startIndex
+  // 2. Create a map of row boundaries based on startIndex (for unslotted fallback)
   const rowBoundaries = rows.map(row => {
     const indices = row.map(e => e.startIndex).filter(idx => idx !== null);
     return {
@@ -1007,12 +1029,12 @@ export const processPDFs = async (pdfFiles, batchSize = 10, maxWorkers = 4) => {
         }
 
 
-  // Assign file name to all record types
-  rawRecords.forEach(r => r.file_name = file.name);
-  filteredRecords.forEach(r => r.file_name = file.name); // This now uses the unique list
+        // Assign file name to all record types
+        rawRecords.forEach(r => r.file_name = file.name);
+        filteredRecords.forEach(r => r.file_name = file.name); // This now uses the unique list
 
-  const allRejectedForFile = [...(validationRejected || []), ...duplicateRejected];
-  allRejectedForFile.forEach(r => r.file_name = file.name);
+        const allRejectedForFile = [...(validationRejected || []), ...duplicateRejected];
+        allRejectedForFile.forEach(r => r.file_name = file.name);
 
         // OPTIMIZATION 5: Parallel JSON generation
         const { preProcessingJson, postProcessingJson } = await generateJsonObjects(
@@ -1023,7 +1045,7 @@ export const processPDFs = async (pdfFiles, batchSize = 10, maxWorkers = 4) => {
           file.name
         );
 
-  logger.info(`[${index + 1}/${pdfFiles.length}] ${file.name} → ${filteredRecords.length} records`);
+        logger.info(`[${index + 1}/${pdfFiles.length}] ${file.name} → ${filteredRecords.length} records`);
 
         return {
           rawRecords,
@@ -1089,12 +1111,12 @@ export const processPDFs = async (pdfFiles, batchSize = 10, maxWorkers = 4) => {
       ? `${((allFilteredRecords.length / allRawRecords.length) * 100).toFixed(1)}%`
       : "0%";
 
-  logger.info(`Processing complete in ${processingTime}s | Success rate: ${successRate}`);
+    logger.info(`Processing complete in ${processingTime}s | Success rate: ${successRate}`);
 
     // PITFALL FIX: Cleanup worker pool after batch
     if (workerThreadPool && pdfFiles.length >= 10 && activeRequests === 0) {
-  // Keep pool alive for reuse
-  logger.info('Worker pool ready for reuse');
+      // Keep pool alive for reuse
+      logger.info('Worker pool ready for reuse');
     }
 
     return {
