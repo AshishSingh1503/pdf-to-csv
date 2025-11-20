@@ -200,22 +200,23 @@ const parseFullName = (fullName) => {
 
   try {
     // Use name-parser library for accurate parsing
-    const parsed = new Parser(fullName);
-    const firstName = parsed.firstName() || '';
-    const lastName = parsed.lastName() || '';
+    // const parsed = new Parser(fullName);
+    // const firstName = parsed.firstName() || '';
+    // const lastName = parsed.lastName() || '';
 
     // Validate that we got meaningful results
-    if (!firstName && !lastName) {
-      logger.warn(`name-parser couldn't parse: "${fullName}"`);
-      // Fallback to manual split if library fails
-      const parts = fullName.trim().split(/\s+/);
-      return {
-        first: parts[0] || '',
-        last: parts.slice(1).join(' ') || ''
-      };
-    }
+    // if (!firstName && !lastName) {
+    //   logger.warn(`name-parser couldn't parse: "${fullName}"`);
+    // Fallback to manual split if library fails
+    const parts = fullName.trim().split(/\s+/);
+    return {
+      first: parts[0] || '',
+      last: parts.slice(1).join(' ') || ''
+    };
+    // }
 
     // If one is missing but we have the other, use manual fallback for completeness
+    /*
     if ((!firstName || !lastName) && fullName.trim()) {
       const parts = fullName.trim().split(/\s+/);
       return {
@@ -225,6 +226,7 @@ const parseFullName = (fullName) => {
     }
 
     return { first: firstName, last: lastName };
+    */
   } catch (error) {
     // logger.error(`Name parser error for "${fullName}":`, error.message);
     // Emergency fallback to manual parsing
@@ -300,8 +302,71 @@ const extractEntitiesSimple = (document) => {
 };
 
 
+// --- NEW: Entity Deduplication ---
+const deduplicateEntities = (entities) => {
+  // Sort by type then minY
+  const sorted = [...entities].sort((a, b) => {
+    if (a.type !== b.type) return a.type.localeCompare(b.type);
+    return a.minY - b.minY;
+  });
+
+  const result = [];
+
+  for (const entity of sorted) {
+    if (result.length === 0) {
+      result.push(entity);
+      continue;
+    }
+
+    const prev = result[result.length - 1];
+
+    // Check if same type
+    if (prev.type === entity.type) {
+      // Check vertical overlap or proximity
+      const prevHeight = prev.maxY - prev.minY;
+      const currHeight = entity.maxY - entity.minY;
+
+      // If they overlap or are very close (gap < 20% of height)
+      const gap = Math.max(0, entity.minY - prev.maxY);
+      const isClose = gap < 0.2 * Math.min(prevHeight, currHeight);
+      const isOverlapping = entity.minY < prev.maxY;
+
+      if (isClose || isOverlapping) {
+        // Check value similarity (exact match or substring)
+        const val1 = prev.value.toLowerCase().replace(/\s+/g, '');
+        const val2 = entity.value.toLowerCase().replace(/\s+/g, '');
+
+        if (val1.includes(val2) || val2.includes(val1)) {
+          // MERGE
+          // Keep the one with longer value (or prev if equal)
+          if (entity.value.length > prev.value.length) {
+            prev.value = entity.value;
+          }
+          // Expand bounds
+          prev.minY = Math.min(prev.minY, entity.minY);
+          prev.maxY = Math.max(prev.maxY, entity.maxY);
+          prev.midY = (prev.minY + prev.maxY) / 2;
+          prev.midX = Math.min(prev.midX, entity.midX); // simplified
+          // Skip adding 'entity' to result
+          continue;
+        }
+      }
+    }
+
+    result.push(entity);
+  }
+  return result;
+};
+
+
 const simpleGrouping = (entities) => {
   if (!Array.isArray(entities) || entities.length === 0) return [];
+
+  // Apply deduplication first
+  const dedupedEntities = deduplicateEntities(entities);
+  if (dedupedEntities.length < entities.length) {
+    logger.debug(`Deduplicated entities: ${entities.length} -> ${dedupedEntities.length}`);
+  }
 
   const pureStartIndexGrouping = (entitySubset) => {
     // This is the original fallback logic, to be used when coordinate data is insufficient
@@ -337,13 +402,13 @@ const simpleGrouping = (entities) => {
   };
 
 
-  const withCoords = entities.filter(e => e.minY != null && e.maxY != null);
-  const withoutCoords = entities.filter(e => e.minY == null || e.maxY == null);
+  const withCoords = dedupedEntities.filter(e => e.minY != null && e.maxY != null);
+  const withoutCoords = dedupedEntities.filter(e => e.minY == null || e.maxY == null);
 
 
-  if (withCoords.length / entities.length < 0.5) {
+  if (withCoords.length / dedupedEntities.length < 0.5) {
     logger.debug('Insufficient coordinate data. Using pure startIndex grouping.');
-    return pureStartIndexGrouping(entities);
+    return pureStartIndexGrouping(dedupedEntities);
   }
   logger.debug('Using overlap-based coordinate grouping.');
 
@@ -440,7 +505,14 @@ const simpleGrouping = (entities) => {
   const fallbackRecords = pureStartIndexGrouping(unslotted);
 
 
-  return [...coordRecords, ...fallbackRecords];
+  // 6. Filter out records without a name (likely artifacts/orphans)
+  const validRecords = [...coordRecords, ...fallbackRecords].filter(r => r.first_name || r.last_name);
+
+  if (validRecords.length < (coordRecords.length + fallbackRecords.length)) {
+    logger.info(`Filtered ${coordRecords.length + fallbackRecords.length - validRecords.length} records without names (likely artifacts).`);
+  }
+
+  return validRecords;
 };
 
 
@@ -1150,6 +1222,3 @@ process.on('exit', async () => {
     await workerThreadPool.terminate();
   }
 });
-
-
-// export { batchInsertRecords };
