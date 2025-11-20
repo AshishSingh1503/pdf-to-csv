@@ -1,11 +1,12 @@
 import { DocumentProcessorServiceClient } from "@google-cloud/documentai";
-import config from "../config/config.js";
+import { config } from "../config/index.js";
 import logger from "../utils/logger.js";
 import path from "path";
 import pLimit from "p-limit";
 import { Worker } from "worker_threads";
 import os from "os";
 import { promises as fsPromises } from "fs";
+import fs from "fs";
 // import pkg from 'name-parser';
 // const { Parser } = pkg;
 
@@ -571,11 +572,11 @@ const retryWithBackoff = async (fn, maxRetries = RETRY_ATTEMPTS, initialDelay = 
       activeRequests--;
       lastError = error;
 
-  const msg = (error && error.message) ? String(error.message) : '';
-  const isRateLimit = error && (error.code === 429 || msg.includes('RESOURCE_EXHAUSTED') || msg.toLowerCase().includes('rate limit'));
-  // Only treat explicit internal 'Request timeout' errors as retryable timeouts.
-  // Avoid broad 'timeout' substring matches that may misclassify unrelated errors.
-  const isTimeout = msg === 'Request timeout' || msg.toLowerCase() === 'request timeout' || msg.includes('Request timeout');
+      const msg = (error && error.message) ? String(error.message) : '';
+      const isRateLimit = error && (error.code === 429 || msg.includes('RESOURCE_EXHAUSTED') || msg.toLowerCase().includes('rate limit'));
+      // Only treat explicit internal 'Request timeout' errors as retryable timeouts.
+      // Avoid broad 'timeout' substring matches that may misclassify unrelated errors.
+      const isTimeout = msg === 'Request timeout' || msg.toLowerCase() === 'request timeout' || msg.includes('Request timeout');
 
       // Retry on rate limits or timeouts with exponential backoff
       if ((isRateLimit || isTimeout) && attempt < maxRetries - 1) {
@@ -1014,18 +1015,27 @@ export const processPDFs = async (pdfFiles, batchSize = 10, maxWorkers = 4) => {
         }
         const filteredRecords = uniqueRecords; // Use the de-duplicated list
         // 👆 --- END DEDUPLICATION --- 👆
-        logger.debug('Extracted entities', { entities: entities.map(e => ({ type: e.type, value: e.value.substring(0, 30), startIndex: e.startIndex })) });
-        const logData = JSON.stringify(entities.map(e => ({ type: e.type, value: e.value.substring(0, 30), startIndex: e.startIndex })), null, 2);
+
         try {
-          // Only write entity debug files when verbose debugging is enabled to avoid I/O overhead
+          // SAVE RAW DOCAI OUTPUT FOR DEBUGGING
+          // Always save this for now as requested by the user to inspect data
+          const safeName = String(file.name || 'unknown').replace(/[^a-z0-9_.-]/gi, '_');
+          const debugDir = path.join(process.cwd(), 'debug_output');
+          if (!fs.existsSync(debugDir)) fs.mkdirSync(debugDir, { recursive: true });
+
+          const outName = path.join(debugDir, `docai-raw-${safeName}-${Date.now()}.json`);
+          // We save the full document object which contains entities, text, pages, etc.
+          fs.writeFileSync(outName, JSON.stringify(result.document, null, 2));
+          logger.info(`Raw DocAI output saved to: ${outName}`);
+
+          // Also save entity debug file if needed
           if ((process.env.LOG_LEVEL || '').toLowerCase() === 'debug') {
-            const safeName = String(file.name || 'unknown').replace(/[^a-z0-9_.-]/gi, '_');
-            const outName = `./entity-debug-${safeName}-${Date.now()}.json`;
-            fs.writeFileSync(outName, logData);
-            logger.debug('Entities written to', outName);
+            const entityOutName = path.join(debugDir, `entity-debug-${safeName}-${Date.now()}.json`);
+            const logData = JSON.stringify(entities.map(e => ({ type: e.type, value: e.value.substring(0, 30), startIndex: e.startIndex })), null, 2);
+            fs.writeFileSync(entityOutName, logData);
           }
         } catch (e) {
-          logger.warn('Failed to write entity debug file', e && e.message);
+          logger.warn('Failed to write debug file', e && e.message);
         }
 
 
