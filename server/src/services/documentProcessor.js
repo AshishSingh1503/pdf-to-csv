@@ -411,15 +411,22 @@ const simpleGrouping = (entities) => {
     logger.debug('Insufficient coordinate data. Using pure startIndex grouping.');
     return pureStartIndexGrouping(dedupedEntities);
   }
-  logger.debug('Using overlap-based coordinate grouping.');
+  logger.debug('Using Hybrid Grouping (Skeleton + Address Attachment).');
 
 
-  // --- NEW: Overlap-Based Grouping Logic (Original First Fit) ---
-  // 1. Sort by Y coordinate (top to bottom)
-  const sortedWithCoords = withCoords.sort((a, b) => a.minY - b.minY);
+  // --- HYBRID GROUPING STRATEGY ---
+
+  // Phase 1: Skeleton Grouping (Stable Entities Only)
+  // We group Name, Mobile, Email, DOB, etc. first. Address is excluded because its huge boxes cause merging issues.
+  const stableEntities = withCoords.filter(e => e.type !== 'address');
+  const addressEntities = withCoords.filter(e => e.type === 'address');
+
+  // Sort stable entities by Y (top to bottom)
+  stableEntities.sort((a, b) => a.minY - b.minY);
+
   const rows = [];
 
-  for (const entity of sortedWithCoords) {
+  for (const entity of stableEntities) {
     let placed = false;
 
     // Try to fit into an existing row
@@ -428,6 +435,7 @@ const simpleGrouping = (entities) => {
       const rowMinY = Math.min(...row.map(e => e.minY));
       const rowMaxY = Math.max(...row.map(e => e.maxY));
       const rowHeight = rowMaxY - rowMinY;
+      const rowMidY = (rowMinY + rowMaxY) / 2;
 
       // Entity bounds
       const entHeight = entity.maxY - entity.minY;
@@ -436,11 +444,26 @@ const simpleGrouping = (entities) => {
       const intersectionStart = Math.max(rowMinY, entity.minY);
       const intersectionEnd = Math.min(rowMaxY, entity.maxY);
       const intersectionHeight = Math.max(0, intersectionEnd - intersectionStart);
-
-      // Overlap threshold: 30% of the smaller height
       const minHeight = Math.min(rowHeight, entHeight);
 
-      // If we have significant overlap, add to row
+      // CONSTRAINT: Name Alignment Check
+      // If the row already has a name, and we are adding another name:
+      // They must be vertically aligned (similar midY) to be considered the same record (e.g. "John" "Doe").
+      // If they are vertically offset, it's likely a new record (e.g. "John" ... "Jane").
+      if (entity.type === 'name') {
+        const existingName = row.find(e => e.type === 'name');
+        if (existingName) {
+          const midYDiff = Math.abs(entity.midY - existingName.midY);
+          const avgHeight = ((existingName.maxY - existingName.minY) + entHeight) / 2;
+
+          // If vertical difference is > 50% of height, treat as separate lines -> separate records
+          if (midYDiff > 0.5 * avgHeight) {
+            continue; // Don't add to this row, keep looking or start new row
+          }
+        }
+      }
+
+      // Standard Overlap Check (First Fit)
       if (intersectionHeight > 0.3 * minHeight) {
         row.push(entity);
         placed = true;
@@ -451,6 +474,52 @@ const simpleGrouping = (entities) => {
     // If not placed, start a new row
     if (!placed) {
       rows.push([entity]);
+    }
+  }
+
+  // Phase 2: Address Attachment
+  // Attach each address entity to the BEST fitting Skeleton Row
+  for (const address of addressEntities) {
+    let bestRow = null;
+    let minDistance = Number.MAX_SAFE_INTEGER;
+    let bestOverlap = -1;
+
+    for (const row of rows) {
+      const rowMinY = Math.min(...row.map(e => e.minY));
+      const rowMaxY = Math.max(...row.map(e => e.maxY));
+      const rowMidY = (rowMinY + rowMaxY) / 2;
+
+      // Check overlap first
+      const intersectionStart = Math.max(rowMinY, address.minY);
+      const intersectionEnd = Math.min(rowMaxY, address.maxY);
+      const overlap = Math.max(0, intersectionEnd - intersectionStart);
+
+      // Distance from address center to row center
+      const distance = Math.abs(address.midY - rowMidY);
+
+      // Logic:
+      // 1. Prefer rows with significant overlap
+      // 2. If no overlap, prefer closest vertical distance
+
+      if (overlap > 0) {
+        if (overlap > bestOverlap) {
+          bestOverlap = overlap;
+          bestRow = row;
+        }
+      } else if (bestOverlap <= 0) {
+        // Only consider distance if we haven't found an overlapping row yet
+        if (distance < minDistance) {
+          minDistance = distance;
+          bestRow = row;
+        }
+      }
+    }
+
+    if (bestRow) {
+      bestRow.push(address);
+    } else {
+      // If no rows exist (edge case), start a new one
+      rows.push([address]);
     }
   }
 
@@ -483,14 +552,24 @@ const simpleGrouping = (entities) => {
 
   // 4. Build records from the completed coordinate-based rows
   const coordRecords = rows.map(row => {
+    // Sort left-to-right for address joining
     row.sort((a, b) => (a.midX ?? a.startIndex ?? a.__order) - (b.midX ?? b.startIndex ?? b.__order));
+
     const record = {};
+
+    // Calculate row bounds for orphan merging later
+    const rowMinY = Math.min(...row.map(e => e.minY));
+    const rowMaxY = Math.max(...row.map(e => e.maxY));
+    record._minY = rowMinY;
+    record._maxY = rowMaxY;
+
     const nameEntity = row.find(e => e.type === 'name');
     if (nameEntity) {
       const { first, last } = parseFullName(nameEntity.value);
       record.first_name = first;
       record.last_name = last;
     }
+
     const getFirst = (type) => row.find(e => e.type === type)?.value;
 
     record.mobile = getFirst('mobile');
@@ -509,65 +588,63 @@ const simpleGrouping = (entities) => {
   const fallbackRecords = pureStartIndexGrouping(unslotted);
 
 
-  // 6. Filter out records without a name (likely artifacts/orphans)
-  const validRecords = [...coordRecords, ...fallbackRecords].filter(r => r.first_name || r.last_name);
+  // 6. ORPHAN MERGING LOGIC
+  // Merge nameless rows into the preceding valid record if they are close
+  const mergedRecords = [];
+  let lastValidRecord = null;
 
-  if (validRecords.length < (coordRecords.length + fallbackRecords.length)) {
-    logger.info(`Filtered ${coordRecords.length + fallbackRecords.length - validRecords.length} records without names (likely artifacts).`);
+  // Combine coord and fallback records for linear processing
+  // Note: Fallback records won't have _minY/_maxY usually, so they might not participate in geometric merging well,
+  // but they are usually few. We focus on coordRecords for the "huge box" fix.
+
+  // We'll process coordRecords for merging first, then append fallbackRecords
+  for (const record of coordRecords) {
+    const hasName = record.first_name || record.last_name;
+
+    if (hasName) {
+      mergedRecords.push(record);
+      lastValidRecord = record;
+    } else {
+      // It's an orphan (no name)
+      // Check if we can merge into lastValidRecord
+      if (lastValidRecord && record._minY != null && lastValidRecord._maxY != null) {
+        // Check vertical distance
+        const gap = record._minY - lastValidRecord._maxY;
+        const prevHeight = lastValidRecord._maxY - lastValidRecord._minY;
+
+        // Threshold: Gap is less than 2x the height of the previous row (generous for multi-line addresses)
+        // or if it's slightly overlapping (negative gap) but not enough to be grouped initially
+        if (gap < (prevHeight * 2.0)) {
+          // MERGE
+          // 1. Append Address
+          if (record.address) {
+            lastValidRecord.address = (lastValidRecord.address ? lastValidRecord.address + ' ' : '') + record.address;
+          }
+          // 2. Copy other fields if missing in parent
+          if (!lastValidRecord.mobile && record.mobile) lastValidRecord.mobile = record.mobile;
+          if (!lastValidRecord.email && record.email) lastValidRecord.email = record.email;
+          if (!lastValidRecord.dateofbirth && record.dateofbirth) lastValidRecord.dateofbirth = record.dateofbirth;
+          if (!lastValidRecord.landline && record.landline) lastValidRecord.landline = record.landline;
+          if (!lastValidRecord.lastseen && record.lastseen) lastValidRecord.lastseen = record.lastseen;
+
+          // Expand bounds of parent to include this merged row (so next orphan can merge too)
+          lastValidRecord._maxY = Math.max(lastValidRecord._maxY, record._maxY);
+          continue; // Done merging, don't add as separate record
+        }
+      }
+      // If not merged, add as is (will likely be filtered out later if it has no name, but we keep it for now)
+      mergedRecords.push(record);
+    }
   }
 
-  return validRecords;
-};
+  // 7. Filter out records without a name (likely artifacts/orphans)
+  const finalRecords = [...mergedRecords, ...fallbackRecords].filter(r => r.first_name || r.last_name);
 
-
-
-const _single_line_address = (address) => {
-  if (!address) return '';
-  let s = address.replace(/\r/g, ' ').replace(/\n/g, ' ');
-  s = s.replace(/[,;\|/]+/g, ' ');
-  s = s.replace(REGEX_PATTERNS.whitespaceMultiple, ' ').trim();
-  s = s.endsWith('.') ? s.slice(0, -1) : s;
-  return s;
-}
-
-
-const fixAddressOrdering = (address) => {
-  if (!address) return address;
-
-  let s = _single_line_address(address).trim();
-  let match;
-
-  match = s.match(REGEX_PATTERNS.addressStatePostcodeStart);
-  if (match) {
-    const [, state, postcode, rest] = match;
-    const out = `${rest.trim()} ${state.toUpperCase()} ${postcode}`;
-    return out.replace(REGEX_PATTERNS.whitespaceMultiple, ' ').trim();
+  if (finalRecords.length < (coordRecords.length + fallbackRecords.length)) {
+    logger.info(`Filtered ${coordRecords.length + fallbackRecords.length - finalRecords.length} records without names (likely artifacts).`);
   }
 
-  match = s.match(REGEX_PATTERNS.addressPostcodeStateEnd);
-  if (match) {
-    const [, postcode, rest, state] = match;
-    const out = `${rest.trim()} ${state.toUpperCase()} ${postcode}`;
-    return out.replace(REGEX_PATTERNS.whitespaceMultiple, ' ').trim();
-  }
-
-  match = s.match(REGEX_PATTERNS.addressStatePostcodeMiddle);
-  if (match) {
-    const [, part1, state, postcode, part2] = match;
-    const out = `${part1.trim()} ${part2.trim()} ${state.toUpperCase()} ${postcode}`;
-    return out.replace(REGEX_PATTERNS.whitespaceMultiple, ' ').trim();
-  }
-
-  match = s.match(REGEX_PATTERNS.addressStatePostcodeAny);
-  if (match) {
-    const state = match[1].toUpperCase();
-    const postcode = match[2];
-    const rest = (s.substring(0, match.index) + s.substring(match.index + match[0].length)).trim();
-    const out = `${rest.replace(REGEX_PATTERNS.whitespaceMultiple, ' ')} ${state} ${postcode}`;
-    return out.trim();
-  }
-
-  return s;
+  return finalRecords;
 };
 
 
