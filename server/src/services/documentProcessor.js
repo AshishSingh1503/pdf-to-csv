@@ -340,6 +340,21 @@ const simpleGrouping = (entities) => {
 
       // If we have significant overlap, add to row
       if (intersectionHeight > 0.3 * minHeight) {
+        // --- NAME GUARD ---
+        // If this is a name, and the row already has a name, check alignment.
+        // If they are not aligned, it's likely a separate record being swallowed.
+        if (entity.type === 'name') {
+          const existingName = row.find(e => e.type === 'name');
+          if (existingName) {
+            const verticalDiff = Math.abs((entity.midY || 0) - (existingName.midY || 0));
+            const heightAvg = ((entity.maxY - entity.minY) + (existingName.maxY - existingName.minY)) / 2;
+            // If vertical difference is significant (> 50% of height), treat as separate record
+            if (verticalDiff > 0.5 * heightAvg) {
+              continue; // Skip this row
+            }
+          }
+        }
+
         row.push(entity);
         placed = true;
         break;
