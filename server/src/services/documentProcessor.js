@@ -391,8 +391,7 @@ const simpleGrouping = (entities) => {
 
       const getFirst = (type) => slice.find(s => s.type === type)?.value;
       record.mobile = getFirst('mobile');
-      // JOIN multiple address parts
-      record.address = slice.filter(s => s.type === 'address').map(s => s.value).join(' ');
+      record.address = getFirst('address');
       record.email = getFirst('email');
       record.dateofbirth = getFirst('dateofbirth');
       record.landline = getFirst('landline');
@@ -414,7 +413,7 @@ const simpleGrouping = (entities) => {
   logger.debug('Using overlap-based coordinate grouping.');
 
 
-  // --- NEW: Overlap-Based Grouping Logic (Original First Fit) ---
+  // --- NEW: Overlap-Based Grouping Logic ---
   // 1. Sort by Y coordinate (top to bottom)
   const sortedWithCoords = withCoords.sort((a, b) => a.minY - b.minY);
   const rows = [];
@@ -492,15 +491,12 @@ const simpleGrouping = (entities) => {
       record.last_name = last;
     }
     const getFirst = (type) => row.find(e => e.type === type)?.value;
-
     record.mobile = getFirst('mobile');
-    // JOIN multiple address parts
-    record.address = row.filter(e => e.type === 'address').map(e => e.value).join(' ');
+    record.address = getFirst('address');
     record.email = getFirst('email');
     record.dateofbirth = getFirst('dateofbirth');
     record.landline = getFirst('landline');
     record.lastseen = getFirst('lastseen');
-
     return record;
   });
 
