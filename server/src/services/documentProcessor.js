@@ -305,14 +305,59 @@ const extractEntitiesSimple = (document) => {
 const simpleGrouping = (entities) => {
   if (!Array.isArray(entities) || entities.length === 0) return [];
 
-  // Filter for entities with valid coordinates
-  const withCoords = entities.filter(e => e.minY != null && e.maxY != null);
-
-  if (withCoords.length === 0) {
-    logger.warn('No entities with coordinates found for grouping.');
-    return [];
+  // Apply deduplication first
+  const dedupedEntities = deduplicateEntities(entities);
+  if (dedupedEntities.length < entities.length) {
+    logger.debug(`Deduplicated entities: ${entities.length} -> ${dedupedEntities.length}`);
   }
 
+  const pureStartIndexGrouping = (entitySubset) => {
+    // This is the original fallback logic, to be used when coordinate data is insufficient
+    const sorted = [...entitySubset].sort((a, b) => (a.startIndex ?? a.__order) - (b.startIndex ?? b.__order));
+    const nameEntities = sorted.filter(e => e.type === 'name');
+    const records = [];
+
+
+    for (let i = 0; i < nameEntities.length; i++) {
+      const nameEnt = nameEntities[i];
+      const nextName = nameEntities[i + 1];
+      const nameStart = nameEnt.startIndex ?? nameEnt.__order;
+      const boundary = nextName?.startIndex ?? Number.MAX_SAFE_INTEGER;
+      const slice = sorted.filter(e => (e.startIndex ?? e.__order) >= nameStart && (e.startIndex ?? e.__order) < boundary);
+
+
+      const record = {};
+      const { first, last } = parseFullName(nameEnt.value);
+      record.first_name = first;
+      record.last_name = last;
+
+
+      const getFirst = (type) => slice.find(s => s.type === type)?.value;
+      record.mobile = getFirst('mobile');
+      // JOIN multiple address parts
+      record.address = slice.filter(s => s.type === 'address').map(s => s.value).join(' ');
+      record.email = getFirst('email');
+      record.dateofbirth = getFirst('dateofbirth');
+      record.landline = getFirst('landline');
+      record.lastseen = getFirst('lastseen');
+      records.push(record);
+    }
+    return records;
+  };
+
+
+  const withCoords = dedupedEntities.filter(e => e.minY != null && e.maxY != null);
+  const withoutCoords = dedupedEntities.filter(e => e.minY == null || e.maxY == null);
+
+
+  if (withCoords.length / dedupedEntities.length < 0.5) {
+    logger.debug('Insufficient coordinate data. Using pure startIndex grouping.');
+    return pureStartIndexGrouping(dedupedEntities);
+  }
+  logger.debug('Using overlap-based coordinate grouping.');
+
+
+  // --- NEW: Overlap-Based Grouping Logic (Original First Fit) ---
   // 1. Sort by Y coordinate (top to bottom)
   const sortedWithCoords = withCoords.sort((a, b) => a.minY - b.minY);
   const rows = [];
@@ -367,15 +412,12 @@ const simpleGrouping = (entities) => {
     }
 
     const getFirst = (type) => row.find(e => e.type === type)?.value;
-
     record.mobile = getFirst('mobile');
-    // JOIN multiple address parts
-    record.address = row.filter(e => e.type === 'address').map(e => e.value).join(' ');
+    record.address = getFirst('address');
     record.email = getFirst('email');
     record.dateofbirth = getFirst('dateofbirth');
     record.landline = getFirst('landline');
     record.lastseen = getFirst('lastseen');
-
     return record;
   });
 
