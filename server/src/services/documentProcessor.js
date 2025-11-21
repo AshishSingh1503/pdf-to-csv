@@ -414,7 +414,7 @@ const simpleGrouping = (entities) => {
   logger.debug('Using overlap-based coordinate grouping.');
 
 
-  // --- NEW: Overlap-Based Grouping Logic (First Fit with Constraints) ---
+  // --- NEW: Overlap-Based Grouping Logic (Original First Fit) ---
   // 1. Sort by Y coordinate (top to bottom)
   const sortedWithCoords = withCoords.sort((a, b) => a.minY - b.minY);
   const rows = [];
@@ -424,13 +424,6 @@ const simpleGrouping = (entities) => {
 
     // Try to fit into an existing row
     for (const row of rows) {
-      // Constraint: One Name Per Row
-      // If the row already has a name, and we are trying to add another name, 
-      // force a new row (unless they are on the same line, but for safety we split).
-      if (entity.type === 'name' && row.some(e => e.type === 'name')) {
-        continue;
-      }
-
       // Calculate row bounds
       const rowMinY = Math.min(...row.map(e => e.minY));
       const rowMaxY = Math.max(...row.map(e => e.maxY));
