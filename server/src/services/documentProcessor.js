@@ -411,77 +411,52 @@ const simpleGrouping = (entities) => {
     logger.debug('Insufficient coordinate data. Using pure startIndex grouping.');
     return pureStartIndexGrouping(dedupedEntities);
   }
-  logger.debug('Using Best-Fit coordinate grouping.');
+  logger.debug('Using overlap-based coordinate grouping.');
 
 
-  // --- NEW: Best-Fit Grouping Logic ---
+  // --- NEW: Overlap-Based Grouping Logic (First Fit with Constraints) ---
   // 1. Sort by Y coordinate (top to bottom)
   const sortedWithCoords = withCoords.sort((a, b) => a.minY - b.minY);
   const rows = [];
 
   for (const entity of sortedWithCoords) {
-    let bestRow = null;
-    let bestScore = -1; // Higher is better
+    let placed = false;
 
     // Try to fit into an existing row
     for (const row of rows) {
+      // Constraint: One Name Per Row
+      // If the row already has a name, and we are trying to add another name, 
+      // force a new row (unless they are on the same line, but for safety we split).
+      if (entity.type === 'name' && row.some(e => e.type === 'name')) {
+        continue;
+      }
+
       // Calculate row bounds
       const rowMinY = Math.min(...row.map(e => e.minY));
       const rowMaxY = Math.max(...row.map(e => e.maxY));
       const rowHeight = rowMaxY - rowMinY;
-      const rowCenterY = (rowMinY + rowMaxY) / 2;
 
       // Entity bounds
       const entHeight = entity.maxY - entity.minY;
-      const entCenterY = (entity.minY + entity.maxY) / 2;
-
-      // Constraint: One Name Per Row (unless horizontally adjacent)
-      if (entity.type === 'name') {
-        const existingName = row.find(e => e.type === 'name');
-        if (existingName) {
-          // If we already have a name, only allow if it's effectively the same line (very close Y)
-          // and not overlapping significantly in X (which would mean they are side-by-side names, rare but possible)
-          // For safety, if we see another name, we usually want a new row unless they are clearly same-line fragments.
-          // Here we enforce a strict "New Name = New Row" unless they are extremely close vertically.
-          const verticalDist = Math.abs(rowCenterY - entCenterY);
-          if (verticalDist > 0.5 * Math.min(rowHeight, entHeight)) {
-            continue; // Skip this row, it already has a name and this one is not on the same line
-          }
-        }
-      }
 
       // Calculate overlap
       const intersectionStart = Math.max(rowMinY, entity.minY);
       const intersectionEnd = Math.min(rowMaxY, entity.maxY);
       const intersectionHeight = Math.max(0, intersectionEnd - intersectionStart);
 
-      // Overlap Score: How much of the smaller item is covered?
+      // Overlap threshold: 30% of the smaller height
       const minHeight = Math.min(rowHeight, entHeight);
-      const overlapRatio = intersectionHeight / minHeight;
 
-      // Distance Score: How close are the centers? (Normalized by height)
-      // We want to minimize distance, so we invert it for the score.
-      const dist = Math.abs(rowCenterY - entCenterY);
-      const distRatio = dist / Math.max(rowHeight, entHeight, 1);
-
-      // Combined Score: Heavily weight overlap, penalize distance
-      // If overlap > 0.3, it's a candidate.
-      if (overlapRatio > 0.3) {
-        // Score = Overlap (0..1) - DistancePenalty (0..1)
-        // We prioritize overlap.
-        const score = overlapRatio - (distRatio * 0.5);
-
-        if (score > bestScore) {
-          bestScore = score;
-          bestRow = row;
-        }
+      // If we have significant overlap, add to row
+      if (intersectionHeight > 0.3 * minHeight) {
+        row.push(entity);
+        placed = true;
+        break;
       }
     }
 
-    // Assign to best row or create new
-    if (bestRow) {
-      bestRow.push(entity);
-    } else {
+    // If not placed, start a new row
+    if (!placed) {
       rows.push([entity]);
     }
   }
@@ -515,24 +490,14 @@ const simpleGrouping = (entities) => {
 
   // 4. Build records from the completed coordinate-based rows
   const coordRecords = rows.map(row => {
-    // Sort left-to-right for address joining
     row.sort((a, b) => (a.midX ?? a.startIndex ?? a.__order) - (b.midX ?? b.startIndex ?? b.__order));
-
     const record = {};
-
-    // Calculate row bounds for orphan merging later
-    const rowMinY = Math.min(...row.map(e => e.minY));
-    const rowMaxY = Math.max(...row.map(e => e.maxY));
-    record._minY = rowMinY;
-    record._maxY = rowMaxY;
-
     const nameEntity = row.find(e => e.type === 'name');
     if (nameEntity) {
       const { first, last } = parseFullName(nameEntity.value);
       record.first_name = first;
       record.last_name = last;
     }
-
     const getFirst = (type) => row.find(e => e.type === type)?.value;
 
     record.mobile = getFirst('mobile');
@@ -551,63 +516,14 @@ const simpleGrouping = (entities) => {
   const fallbackRecords = pureStartIndexGrouping(unslotted);
 
 
-  // 6. ORPHAN MERGING LOGIC
-  // Merge nameless rows into the preceding valid record if they are close
-  const mergedRecords = [];
-  let lastValidRecord = null;
+  // 6. Filter out records without a name (likely artifacts/orphans)
+  const validRecords = [...coordRecords, ...fallbackRecords].filter(r => r.first_name || r.last_name);
 
-  // Combine coord and fallback records for linear processing
-  // Note: Fallback records won't have _minY/_maxY usually, so they might not participate in geometric merging well,
-  // but they are usually few. We focus on coordRecords for the "huge box" fix.
-
-  // We'll process coordRecords for merging first, then append fallbackRecords
-  for (const record of coordRecords) {
-    const hasName = record.first_name || record.last_name;
-
-    if (hasName) {
-      mergedRecords.push(record);
-      lastValidRecord = record;
-    } else {
-      // It's an orphan (no name)
-      // Check if we can merge into lastValidRecord
-      if (lastValidRecord && record._minY != null && lastValidRecord._maxY != null) {
-        // Check vertical distance
-        const gap = record._minY - lastValidRecord._maxY;
-        const prevHeight = lastValidRecord._maxY - lastValidRecord._minY;
-
-        // Threshold: Gap is less than 2x the height of the previous row (generous for multi-line addresses)
-        // or if it's slightly overlapping (negative gap) but not enough to be grouped initially
-        if (gap < (prevHeight * 2.0)) {
-          // MERGE
-          // 1. Append Address
-          if (record.address) {
-            lastValidRecord.address = (lastValidRecord.address ? lastValidRecord.address + ' ' : '') + record.address;
-          }
-          // 2. Copy other fields if missing in parent
-          if (!lastValidRecord.mobile && record.mobile) lastValidRecord.mobile = record.mobile;
-          if (!lastValidRecord.email && record.email) lastValidRecord.email = record.email;
-          if (!lastValidRecord.dateofbirth && record.dateofbirth) lastValidRecord.dateofbirth = record.dateofbirth;
-          if (!lastValidRecord.landline && record.landline) lastValidRecord.landline = record.landline;
-          if (!lastValidRecord.lastseen && record.lastseen) lastValidRecord.lastseen = record.lastseen;
-
-          // Expand bounds of parent to include this merged row (so next orphan can merge too)
-          lastValidRecord._maxY = Math.max(lastValidRecord._maxY, record._maxY);
-          continue; // Done merging, don't add as separate record
-        }
-      }
-      // If not merged, add as is (will likely be filtered out later if it has no name, but we keep it for now)
-      mergedRecords.push(record);
-    }
+  if (validRecords.length < (coordRecords.length + fallbackRecords.length)) {
+    logger.info(`Filtered ${coordRecords.length + fallbackRecords.length - validRecords.length} records without names (likely artifacts).`);
   }
 
-  // 7. Filter out records without a name (likely artifacts/orphans)
-  const finalRecords = [...mergedRecords, ...fallbackRecords].filter(r => r.first_name || r.last_name);
-
-  if (finalRecords.length < (coordRecords.length + fallbackRecords.length)) {
-    logger.info(`Filtered ${coordRecords.length + fallbackRecords.length - finalRecords.length} records without names (likely artifacts).`);
-  }
-
-  return finalRecords;
+  return validRecords;
 };
 
 
