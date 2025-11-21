@@ -302,118 +302,17 @@ const extractEntitiesSimple = (document) => {
 };
 
 
-// --- NEW: Entity Deduplication ---
-const deduplicateEntities = (entities) => {
-  // Sort by type then minY
-  const sorted = [...entities].sort((a, b) => {
-    if (a.type !== b.type) return a.type.localeCompare(b.type);
-    return a.minY - b.minY;
-  });
-
-  const result = [];
-
-  for (const entity of sorted) {
-    if (result.length === 0) {
-      result.push(entity);
-      continue;
-    }
-
-    const prev = result[result.length - 1];
-
-    // Check if same type
-    if (prev.type === entity.type) {
-      // Check vertical overlap or proximity
-      const prevHeight = prev.maxY - prev.minY;
-      const currHeight = entity.maxY - entity.minY;
-
-      // If they overlap or are very close (gap < 20% of height)
-      const gap = Math.max(0, entity.minY - prev.maxY);
-      const isClose = gap < 0.2 * Math.min(prevHeight, currHeight);
-      const isOverlapping = entity.minY < prev.maxY;
-
-      if (isClose || isOverlapping) {
-        // Check value similarity (exact match or substring)
-        const val1 = prev.value.toLowerCase().replace(/\s+/g, '');
-        const val2 = entity.value.toLowerCase().replace(/\s+/g, '');
-
-        if (val1.includes(val2) || val2.includes(val1)) {
-          // MERGE
-          // Keep the one with longer value (or prev if equal)
-          if (entity.value.length > prev.value.length) {
-            prev.value = entity.value;
-          }
-          // Expand bounds
-          prev.minY = Math.min(prev.minY, entity.minY);
-          prev.maxY = Math.max(prev.maxY, entity.maxY);
-          prev.midY = (prev.minY + prev.maxY) / 2;
-          prev.midX = Math.min(prev.midX, entity.midX); // simplified
-          // Skip adding 'entity' to result
-          continue;
-        }
-      }
-    }
-
-    result.push(entity);
-  }
-  return result;
-};
-
-
 const simpleGrouping = (entities) => {
   if (!Array.isArray(entities) || entities.length === 0) return [];
 
-  // Apply deduplication first
-  const dedupedEntities = deduplicateEntities(entities);
-  if (dedupedEntities.length < entities.length) {
-    logger.debug(`Deduplicated entities: ${entities.length} -> ${dedupedEntities.length}`);
+  // Filter for entities with valid coordinates
+  const withCoords = entities.filter(e => e.minY != null && e.maxY != null);
+
+  if (withCoords.length === 0) {
+    logger.warn('No entities with coordinates found for grouping.');
+    return [];
   }
 
-  const pureStartIndexGrouping = (entitySubset) => {
-    // This is the original fallback logic, to be used when coordinate data is insufficient
-    const sorted = [...entitySubset].sort((a, b) => (a.startIndex ?? a.__order) - (b.startIndex ?? b.__order));
-    const nameEntities = sorted.filter(e => e.type === 'name');
-    const records = [];
-
-
-    for (let i = 0; i < nameEntities.length; i++) {
-      const nameEnt = nameEntities[i];
-      const nextName = nameEntities[i + 1];
-      const nameStart = nameEnt.startIndex ?? nameEnt.__order;
-      const boundary = nextName?.startIndex ?? Number.MAX_SAFE_INTEGER;
-      const slice = sorted.filter(e => (e.startIndex ?? e.__order) >= nameStart && (e.startIndex ?? e.__order) < boundary);
-
-
-      const record = {};
-      const { first, last } = parseFullName(nameEnt.value);
-      record.first_name = first;
-      record.last_name = last;
-
-
-      const getFirst = (type) => slice.find(s => s.type === type)?.value;
-      record.mobile = getFirst('mobile');
-      record.address = getFirst('address');
-      record.email = getFirst('email');
-      record.dateofbirth = getFirst('dateofbirth');
-      record.landline = getFirst('landline');
-      record.lastseen = getFirst('lastseen');
-      records.push(record);
-    }
-    return records;
-  };
-
-
-  const withCoords = dedupedEntities.filter(e => e.minY != null && e.maxY != null);
-  const withoutCoords = dedupedEntities.filter(e => e.minY == null || e.maxY == null);
-
-
-  if (withCoords.length / dedupedEntities.length < 0.5) {
-    logger.debug('Insufficient coordinate data. Using pure startIndex grouping.');
-    return pureStartIndexGrouping(dedupedEntities);
-  }
-  logger.debug('Using overlap-based coordinate grouping.');
-
-
-  // --- NEW: Overlap-Based Grouping Logic ---
   // 1. Sort by Y coordinate (top to bottom)
   const sortedWithCoords = withCoords.sort((a, b) => a.minY - b.minY);
   const rows = [];
@@ -453,117 +352,41 @@ const simpleGrouping = (entities) => {
     }
   }
 
-  // 2. Create a map of row boundaries based on startIndex (for unslotted fallback)
-  const rowBoundaries = rows.map(row => {
-    const indices = row.map(e => e.startIndex).filter(idx => idx !== null);
-    return {
-      row,
-      minIdx: Math.min(...indices, Number.MAX_SAFE_INTEGER),
-      maxIdx: Math.max(...indices, -1),
-    };
-  });
+  // 2. Build records from the rows
+  const records = rows.map(row => {
+    // Sort left-to-right for address joining
+    row.sort((a, b) => (a.midX ?? 0) - (b.midX ?? 0));
 
-
-  // 3. Slot entities without coordinates into the coordinate-based rows
-  const unslotted = [];
-  for (const entity of withoutCoords) {
-    if (entity.startIndex === null) {
-      unslotted.push(entity);
-      continue;
-    }
-    const targetRow = rowBoundaries.find(b => entity.startIndex >= b.minIdx && entity.startIndex <= b.maxIdx);
-    if (targetRow) {
-      targetRow.row.push(entity);
-    } else {
-      unslotted.push(entity);
-    }
-  }
-
-
-  // 4. Build records from the completed coordinate-based rows
-  const coordRecords = rows.map(row => {
-    row.sort((a, b) => (a.midX ?? a.startIndex ?? a.__order) - (b.midX ?? b.startIndex ?? b.__order));
     const record = {};
+
     const nameEntity = row.find(e => e.type === 'name');
     if (nameEntity) {
       const { first, last } = parseFullName(nameEntity.value);
       record.first_name = first;
       record.last_name = last;
     }
+
     const getFirst = (type) => row.find(e => e.type === type)?.value;
+
     record.mobile = getFirst('mobile');
-    record.address = getFirst('address');
+    // JOIN multiple address parts
+    record.address = row.filter(e => e.type === 'address').map(e => e.value).join(' ');
     record.email = getFirst('email');
     record.dateofbirth = getFirst('dateofbirth');
     record.landline = getFirst('landline');
     record.lastseen = getFirst('lastseen');
+
     return record;
   });
 
+  // 3. Filter out records without a name (likely artifacts/orphans)
+  const validRecords = records.filter(r => r.first_name || r.last_name);
 
-  // 5. Process any remaining unslotted entities using the original fallback logic
-  const fallbackRecords = pureStartIndexGrouping(unslotted);
-
-
-  // 6. Filter out records without a name (likely artifacts/orphans)
-  const validRecords = [...coordRecords, ...fallbackRecords].filter(r => r.first_name || r.last_name);
-
-  if (validRecords.length < (coordRecords.length + fallbackRecords.length)) {
-    logger.info(`Filtered ${coordRecords.length + fallbackRecords.length - validRecords.length} records without names (likely artifacts).`);
+  if (validRecords.length < records.length) {
+    logger.info(`Filtered ${records.length - validRecords.length} records without names.`);
   }
 
   return validRecords;
-};
-
-
-
-const _single_line_address = (address) => {
-  if (!address) return '';
-  let s = address.replace(/\r/g, ' ').replace(/\n/g, ' ');
-  s = s.replace(/[,;\|/]+/g, ' ');
-  s = s.replace(REGEX_PATTERNS.whitespaceMultiple, ' ').trim();
-  s = s.endsWith('.') ? s.slice(0, -1) : s;
-  return s;
-}
-
-
-const fixAddressOrdering = (address) => {
-  if (!address) return address;
-
-  let s = _single_line_address(address).trim();
-  let match;
-
-  match = s.match(REGEX_PATTERNS.addressStatePostcodeStart);
-  if (match) {
-    const [, state, postcode, rest] = match;
-    const out = `${rest.trim()} ${state.toUpperCase()} ${postcode}`;
-    return out.replace(REGEX_PATTERNS.whitespaceMultiple, ' ').trim();
-  }
-
-  match = s.match(REGEX_PATTERNS.addressPostcodeStateEnd);
-  if (match) {
-    const [, postcode, rest, state] = match;
-    const out = `${rest.trim()} ${state.toUpperCase()} ${postcode}`;
-    return out.replace(REGEX_PATTERNS.whitespaceMultiple, ' ').trim();
-  }
-
-  match = s.match(REGEX_PATTERNS.addressStatePostcodeMiddle);
-  if (match) {
-    const [, part1, state, postcode, part2] = match;
-    const out = `${part1.trim()} ${part2.trim()} ${state.toUpperCase()} ${postcode}`;
-    return out.replace(REGEX_PATTERNS.whitespaceMultiple, ' ').trim();
-  }
-
-  match = s.match(REGEX_PATTERNS.addressStatePostcodeAny);
-  if (match) {
-    const state = match[1].toUpperCase();
-    const postcode = match[2];
-    const rest = (s.substring(0, match.index) + s.substring(match.index + match[0].length)).trim();
-    const out = `${rest.replace(REGEX_PATTERNS.whitespaceMultiple, ' ')} ${state} ${postcode}`;
-    return out.trim();
-  }
-
-  return s;
 };
 
 
@@ -577,7 +400,6 @@ const cleanName = (name) => {
   const parts = s ? s.split(' ').map(p => p.charAt(0).toUpperCase() + p.slice(1)) : [];
   return parts.join(' ').trim();
 };
-
 
 
 const normalizeDateField = (dateStr) => {
@@ -605,7 +427,6 @@ const normalizeDateField = (dateStr) => {
     return '';
   }
 };
-
 
 
 const isValidLandline = (landline) => {
@@ -810,7 +631,21 @@ const generateJsonObjects = async (rawRecords, filteredRecords, entities, rawTex
   return { preProcessingJson, postProcessingJson };
 };
 
+const fixAddressOrdering = (address) => {
+  if (!address) return '';
 
+  // If address starts with state/postcode (e.g. "NSW 2000 123 Fake St")
+  const startMatch = address.match(REGEX_PATTERNS.addressStatePostcodeStart);
+  if (startMatch) {
+    return `${startMatch[3]} ${startMatch[1]} ${startMatch[2]}`;
+  }
+
+  // If address has state/postcode in middle (e.g. "123 Fake St NSW 2000 Australia")
+  // This is harder to safely reorder without breaking things, but we can try
+  // For now, we trust the downstream validation or user to fix complex cases
+
+  return address;
+};
 
 // --- OPTIMIZATION 5: Batch Record Processing in Parallel ---
 const batchValidateRecords = async (records, batchSize = 100) => {
