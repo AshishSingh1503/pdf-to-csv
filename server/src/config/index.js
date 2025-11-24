@@ -95,7 +95,7 @@ export const config = {
   enableDuplicateDetection: process.env.ENABLE_DUPLICATE_DETECTION === "true",
   duplicateKeyField: process.env.DUPLICATE_KEY_FIELD || "mobile",
   outputDir: outputPath,
-  
+
   // Database configuration
   dbHost: process.env.DB_HOST || "localhost",
   dbPort: parseInt(process.env.DB_PORT) || 5432,
@@ -121,9 +121,14 @@ export const config = {
   maxQueueLength: _maxQueueLength,
   enableGracefulShutdown: _enableGracefulShutdown,
   gracefulShutdownTimeout: _gracefulShutdownTimeout,
-  
+
   // Cloud Storage configuration
   outputBucket: process.env.OUTPUT_BUCKET || "pdf-data-extraction-output-bucket",
   storageLocation: process.env.STORAGE_LOCATION || "us",
   deleteRawAfterProcess: process.env.DELETE_RAW_AFTER_PROCESS === 'true',
+
+  // Performance Tuning
+  maxWorkers: parseInt(process.env.MAX_WORKERS, 10) || 24,
+  batchSizeRecords: parseInt(process.env.DB_INSERT_CHUNK_SIZE, 10) || 5000,
+  maxConcurrentDocAIRequests: parseInt(process.env.MAX_CONCURRENT_DOCAI_REQUESTS, 10) || 150,
 };
