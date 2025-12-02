@@ -829,18 +829,60 @@ export const processPDFs = async (pdfFiles, batchSize = 10, maxWorkers = 4) => {
 
         const { validRecords: filteredRecordsRaw, rejectedRecords: validationRejected } = await batchValidateRecords(rawRecords, 100);
 
+        // Deduplication Logic:
+        // 1. Group by mobile number
+        const mobileGroups = new Map();
+        const records = filteredRecordsRaw || [];
+        
+        for (const record of records) {
+          if (!record.mobile) continue; // Should be filtered already, but safety check
+          if (!mobileGroups.has(record.mobile)) {
+            mobileGroups.set(record.mobile, []);
+          }
+          mobileGroups.get(record.mobile).push(record);
+        }
+
         const uniqueRecords = [];
-        const seenMobiles = new Set();
         const duplicateRejected = [];
-        for (const record of (filteredRecordsRaw || [])) {
-          if (!seenMobiles.has(record.mobile)) {
-            uniqueRecords.push(record);
-            seenMobiles.add(record.mobile);
+
+        // Helper to count populated fields
+        const countPopulatedFields = (r) => {
+          let count = 0;
+          if (r.first_name) count++;
+          if (r.last_name) count++;
+          if (r.dateofbirth) count++;
+          if (r.address) count++;
+          if (r.email) count++;
+          if (r.landline) count++;
+          if (r.lastseen) count++;
+          return count;
+        };
+
+        for (const [mobile, group] of mobileGroups) {
+          if (group.length === 1) {
+            uniqueRecords.push(group[0]);
           } else {
-            duplicateRejected.push({
-              ...record,
-              rejection_reason: 'Duplicate mobile number'
-            });
+            // Find best record
+            // Priority 1: Has Address
+            const withAddress = group.filter(r => r.address && r.address.length > 5);
+            
+            let candidates = withAddress.length > 0 ? withAddress : group;
+            
+            // Priority 2: Most populated fields
+            candidates.sort((a, b) => countPopulatedFields(b) - countPopulatedFields(a));
+            
+            const winner = candidates[0];
+            uniqueRecords.push(winner);
+
+            // Mark others as duplicates
+            for (const record of group) {
+              if (record !== winner) {
+                duplicateRejected.push({
+                  ...record,
+                  rejection_reason: 'Duplicate mobile number'
+                });
+              }
+            }
           }
         }
         const filteredRecords = uniqueRecords;
