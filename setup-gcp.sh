@@ -21,6 +21,7 @@ SERVICE_ACCOUNT="pdf2csv-service@pdf2csv-475708.iam.gserviceaccount.com"
 echo "🏗️ Setting up GCP infrastructure for PDF2CSV..."
 
 # 1. Set project
+
 gcloud config set project $PROJECT_ID
 
 # 2. Enable required APIs
