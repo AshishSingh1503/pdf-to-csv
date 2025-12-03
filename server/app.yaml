@@ -5,7 +5,7 @@ env_variables:
   PORT: 8080
   PROJECT_ID: pdf2csv-475708
   LOCATION: us
-  PROCESSOR_ID: 9f82bf3d2a02e2ab
+  PROCESSOR_ID: ac7cd16151a4efbe
   DB_HOST: /cloudsql/pdf2csv-475708:us-central1:pdf2csv-instance
   DB_PORT: 5432
   DB_NAME: pdf2csv_db
