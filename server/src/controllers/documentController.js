@@ -226,7 +226,7 @@ export const processDocuments = async (req, res) => {
       if (!batchQueueManager.canAcceptNewBatch()) {
         logger.warn('Upload rejected: queue at capacity before creating file metadata', { batchId, collectionId: collectionIdNum });
         // Notify uploader immediately
-        try { broadcast({ type: 'QUEUE_FULL', batchId, collectionId: collectionIdNum, queueLength: batchQueueManager.queue.length, maxLength: batchQueueManager.MAX_QUEUE_LENGTH, message: 'Server is at capacity. Please try again in a few minutes.' }) } catch (e) {}
+        try { broadcast({ type: 'QUEUE_FULL', batchId, collectionId: collectionIdNum, queueLength: batchQueueManager.queue.length, maxLength: batchQueueManager.MAX_QUEUE_LENGTH, message: 'Server is at capacity. Please try again in a few minutes.' }) } catch (e) { }
         return res.status(503).json({ success: false, error: 'Server is at capacity. Please try again in a few minutes.', queueFull: true });
       }
     } catch (e) {
@@ -234,7 +234,7 @@ export const processDocuments = async (req, res) => {
     }
 
     // Step 1: Create initial metadata records
-    const initialMetadataPromises = fileArray.map(file => 
+    const initialMetadataPromises = fileArray.map(file =>
       FileMetadata.create({
         collection_id: collectionIdNum,
         original_filename: file.name,
@@ -255,18 +255,18 @@ export const processDocuments = async (req, res) => {
         await metadata.updateCloudStoragePathRaw(rawGcsPath);
         await metadata.updateStatus('processing'); // Now ready for processing
         return metadata;
-      } catch (uploadError) {  
-        logger.error(`Failed to upload raw file ${file.name} for batch ${batchId}.`, {  
-          error: uploadError.message,  
-          code: uploadError.code,  
-          fileName: file.name,  
-          fileSize: file.size,  
-          collectionId: collectionIdNum,  
-          batchId: batchId,  
-          stack: uploadError.stack  
-        });  
-        await metadata.updateStatus('failed');  
-        return null;  
+      } catch (uploadError) {
+        logger.error(`Failed to upload raw file ${file.name} for batch ${batchId}.`, {
+          error: uploadError.message,
+          code: uploadError.code,
+          fileName: file.name,
+          fileSize: file.size,
+          collectionId: collectionIdNum,
+          batchId: batchId,
+          stack: uploadError.stack
+        });
+        await metadata.updateStatus('failed');
+        return null;
       }
     });
 
@@ -374,17 +374,26 @@ const processPDFFilesParallel = async (fileArray, collectionIdNum, fileMetadatas
     // Download raw files from GCS to a temporary local directory
     const filesToProcess = [];
     for (const meta of fileMetadatas) {
-        try {
-            const tempPath = await CloudStorageService.downloadFile(meta.cloud_storage_path_raw);
-            // Attach temporary info directly to the class instance to preserve its methods
-            meta.tempPath = tempPath;
-            meta.name = meta.original_filename;
-            meta.mv = (newPath) => fs.promises.rename(tempPath, newPath);
-            filesToProcess.push(meta);
-        } catch (downloadError) {
-            logger.error(`Failed to download raw file ${meta.original_filename} from ${meta.cloud_storage_path_raw}`, downloadError);
-            await meta.updateStatus('failed');
+      try {
+        // OPTIMIZATION: Use Direct GCS URI if available
+        if (meta.cloud_storage_path_raw) {
+          meta.gcsUri = meta.cloud_storage_path_raw;
+          meta.name = meta.original_filename;
+          // Mock .mv for compatibility (though it shouldn't be called if gcsUri is present)
+          meta.mv = async () => { throw new Error("Should not move file when using GCS URI"); };
+          filesToProcess.push(meta);
+        } else {
+          const tempPath = await CloudStorageService.downloadFile(meta.cloud_storage_path_raw);
+          // Attach temporary info directly to the class instance to preserve its methods
+          meta.tempPath = tempPath;
+          meta.name = meta.original_filename;
+          meta.mv = (newPath) => fs.promises.rename(tempPath, newPath);
+          filesToProcess.push(meta);
         }
+      } catch (downloadError) {
+        logger.error(`Failed to download raw file ${meta.original_filename} from ${meta.cloud_storage_path_raw}`, downloadError);
+        await meta.updateStatus('failed');
+      }
     }
     if (filesToProcess.length === 0) {
       logger.error(`Batch ${batchId} aborted: all raw file downloads failed.`);
@@ -445,23 +454,23 @@ const processPDFFilesParallel = async (fileArray, collectionIdNum, fileMetadatas
 
     // STEP 1: Process ALL files at once with high concurrency
     const { allRawRecords, allFilteredRecords, allRemovedRecords, allPreProcessingJson, allPostProcessingJson } =
-        await processPDFs(filesToProcess, 10, 4);
+      await processPDFs(filesToProcess, 10, 4);
 
     const processingTimestamp = new Date().toISOString();
-    
+
     // ⭐ OPTIMIZATION: Prepare ALL records at once
-   const allPreProcessRecords = allRawRecords.map((record) => ({  
-     collection_id: collectionIdNum,  
-     full_name: `${record.first_name || ''} ${record.last_name || ''}`.trim(),  
-     mobile: record.mobile,  
-     email: record.email,  
-     address: record.address,  
-     dateofbirth: record.dateofbirth,  
-     landline: record.landline,  
-     lastseen: record.lastseen,  
-     file_name: record.file_name,  
-     processing_timestamp: processingTimestamp  
-   }));
+    const allPreProcessRecords = allRawRecords.map((record) => ({
+      collection_id: collectionIdNum,
+      full_name: `${record.first_name || ''} ${record.last_name || ''}`.trim(),
+      mobile: record.mobile,
+      email: record.email,
+      address: record.address,
+      dateofbirth: record.dateofbirth,
+      landline: record.landline,
+      lastseen: record.lastseen,
+      file_name: record.file_name,
+      processing_timestamp: processingTimestamp
+    }));
 
     const allPostProcessRecords = allFilteredRecords.map((record) => ({
       collection_id: collectionIdNum,
@@ -478,10 +487,10 @@ const processPDFFilesParallel = async (fileArray, collectionIdNum, fileMetadatas
       processing_timestamp: processingTimestamp
     }));
 
-  logger.info(`Prepared: ${allPreProcessRecords.length} pre + ${allPostProcessRecords.length} post records`);
+    logger.info(`Prepared: ${allPreProcessRecords.length} pre + ${allPostProcessRecords.length} post records`);
     // ⭐ KEY OPTIMIZATION: Insert in chunks to avoid hitting parameter limits and excessive memory
     logger.info(`Inserting into database with chunking...`);
-  const CHUNK_SIZE = parseInt(process.env.DB_INSERT_CHUNK_SIZE, 10) || 5000;
+    const CHUNK_SIZE = parseInt(process.env.DB_INSERT_CHUNK_SIZE, 10) || 5000;
 
     const chunkAndInsert = async (Model, records, label) => {
       if (!records || records.length === 0) return 0;
@@ -510,64 +519,64 @@ const processPDFFilesParallel = async (fileArray, collectionIdNum, fileMetadatas
     };
 
     try {
-        const insertedPreCount = await chunkAndInsert(PreProcessRecord, allPreProcessRecords, 'pre-process');
-        const insertedPostCount = await chunkAndInsert(PostProcessRecord, allPostProcessRecords, 'post-process');
-        const insertedRemovedCount = await chunkAndInsert(RemovedRecord, allRemovedRecordsForDB, 'removed');
-        logger.info(`Inserted total: ${insertedPreCount} pre, ${insertedPostCount} post, ${insertedRemovedCount} removed records`);
+      const insertedPreCount = await chunkAndInsert(PreProcessRecord, allPreProcessRecords, 'pre-process');
+      const insertedPostCount = await chunkAndInsert(PostProcessRecord, allPostProcessRecords, 'post-process');
+      const insertedRemovedCount = await chunkAndInsert(RemovedRecord, allRemovedRecordsForDB, 'removed');
+      logger.info(`Inserted total: ${insertedPreCount} pre, ${insertedPostCount} post, ${insertedRemovedCount} removed records`);
     } catch (dbError) {
-        logger.error('Database insert failed for batch.', dbError);
-        for (const meta of fileMetadatas) {
-            await meta.updateStatus('error_db_insert');
-        }
-        // Broadcast a failure event
-        broadcast({ type: 'BATCH_PROCESSING_FAILED', batchId, collectionId: collectionIdNum, error: 'Database insert failed' });
-        return; // Stop further processing for this batch
+      logger.error('Database insert failed for batch.', dbError);
+      for (const meta of fileMetadatas) {
+        await meta.updateStatus('error_db_insert');
+      }
+      // Broadcast a failure event
+      broadcast({ type: 'BATCH_PROCESSING_FAILED', batchId, collectionId: collectionIdNum, error: 'Database insert failed' });
+      return; // Stop further processing for this batch
     }
 
 
     // After successful DB inserts, proceed with uploading processed files and deleting raw files.
     for (const meta of filesToProcess) {
-        try {
-            const preJson = allPreProcessingJson.find(j => j.file_name === meta.original_filename);
-            const postJson = allPostProcessingJson.find(j => j.file_name === meta.original_filename);
+      try {
+        const preJson = allPreProcessingJson.find(j => j.file_name === meta.original_filename);
+        const postJson = allPostProcessingJson.find(j => j.file_name === meta.original_filename);
 
-            const processedFiles = [];
-            if (preJson) {
-              processedFiles.push({ name: `${meta.original_filename}.pre-processing.json`, content: JSON.stringify(preJson, null, 2), contentType: 'application/json' });
-            }
-            if (postJson) {
-              processedFiles.push({ name: `${meta.original_filename}.post-processing.json`, content: JSON.stringify(postJson, null, 2), contentType: 'application/json' });
-            }
-
-            if (processedFiles.length > 0) {
-              const processedGcsPaths = await CloudStorageService.uploadProcessedFiles(processedFiles, meta.collection_id, meta.batch_id);
-              const processedDir = path.dirname(processedGcsPaths[0]);
-              await meta.updateCloudStoragePathProcessed(processedDir);
-            }
-
-            // Now that DB and processed file uploads are successful, conditionally delete the raw file.
-            await meta.updateStatus('completed');
-
-            // Now that DB and processed file uploads are successful, conditionally delete the raw file.
-            if (config.deleteRawAfterProcess) {
-                if (meta.cloud_storage_path_raw) {
-                    try {
-                        await CloudStorageService.deleteFile(meta.cloud_storage_path_raw);
-                        logger.info(`Successfully deleted raw PDF: ${meta.cloud_storage_path_raw}`);
-                        // Nullify the path in the database after successful deletion
-                        await meta.updateCloudStoragePathRaw(null);
-                    } catch (deleteError) {
-                        logger.error(`Failed to delete raw PDF ${meta.cloud_storage_path_raw}. Please check GCS permissions.`, deleteError);
-                        await meta.updateStatus('error_delete');
-                    }
-                } else {
-                    logger.warn(`Could not delete raw PDF for file ${meta.original_filename} because cloud_storage_path_raw is missing.`);
-                }
-            }
-        } catch (postProcessError) {
-            logger.error(`Error during post-processing for file ${meta.original_filename}`, postProcessError);
-            await meta.updateStatus('error_processed_upload');
+        const processedFiles = [];
+        if (preJson) {
+          processedFiles.push({ name: `${meta.original_filename}.pre-processing.json`, content: JSON.stringify(preJson, null, 2), contentType: 'application/json' });
         }
+        if (postJson) {
+          processedFiles.push({ name: `${meta.original_filename}.post-processing.json`, content: JSON.stringify(postJson, null, 2), contentType: 'application/json' });
+        }
+
+        if (processedFiles.length > 0) {
+          const processedGcsPaths = await CloudStorageService.uploadProcessedFiles(processedFiles, meta.collection_id, meta.batch_id);
+          const processedDir = path.dirname(processedGcsPaths[0]);
+          await meta.updateCloudStoragePathProcessed(processedDir);
+        }
+
+        // Now that DB and processed file uploads are successful, conditionally delete the raw file.
+        await meta.updateStatus('completed');
+
+        // Now that DB and processed file uploads are successful, conditionally delete the raw file.
+        if (config.deleteRawAfterProcess) {
+          if (meta.cloud_storage_path_raw) {
+            try {
+              await CloudStorageService.deleteFile(meta.cloud_storage_path_raw);
+              logger.info(`Successfully deleted raw PDF: ${meta.cloud_storage_path_raw}`);
+              // Nullify the path in the database after successful deletion
+              await meta.updateCloudStoragePathRaw(null);
+            } catch (deleteError) {
+              logger.error(`Failed to delete raw PDF ${meta.cloud_storage_path_raw}. Please check GCS permissions.`, deleteError);
+              await meta.updateStatus('error_delete');
+            }
+          } else {
+            logger.warn(`Could not delete raw PDF for file ${meta.original_filename} because cloud_storage_path_raw is missing.`);
+          }
+        }
+      } catch (postProcessError) {
+        logger.error(`Error during post-processing for file ${meta.original_filename}`, postProcessError);
+        await meta.updateStatus('error_processed_upload');
+      }
     }
 
 
@@ -646,7 +655,7 @@ const processPDFFilesParallel = async (fileArray, collectionIdNum, fileMetadatas
     // Broadcast batch failure using updated metadata. If some files succeeded, mark partial:true
     try {
       broadcast({ type: 'BATCH_PROCESSING_FAILED', batchId, collectionId: collectionIdNum, fileCount: fileMetadatas.length, error: error?.message, files: updatedMetadatas, startedAt, partial: anyCompleted });
-      } catch (e) {
+    } catch (e) {
       logger.warn('Unable to broadcast batch failure:', e && e.message);
     }
 
@@ -668,7 +677,7 @@ const processPDFFilesParallel = async (fileArray, collectionIdNum, fileMetadatas
     // Ensure heartbeat interval is cleared on all exits (success, partial failure, exception)
     try {
       // stop future heartbeats deterministically
-      try { stopped = true; } catch (e) {}
+      try { stopped = true; } catch (e) { }
       if (progressInterval) clearTimeout(progressInterval);
     } catch (e) {
       logger.warn('Error clearing progressInterval:', e && e.message);
@@ -680,7 +689,7 @@ const processPDFFilesParallel = async (fileArray, collectionIdNum, fileMetadatas
 // Keep old sequential version as backup (not used)
 // const processPDFFilesSequential = async (fileArray, collectionId, fileMetadatas) => {
 //   console.warn("⚠️  Using sequential processing (slow). Use processPDFFilesParallel instead.");
-  
+
 //   for (let i = 0; i < fileArray.length; i++) {
 //     const file = fileArray[i];
 //     let fileMetadata = fileMetadatas[i];
@@ -732,9 +741,9 @@ export const updateUploadProgress = async (req, res) => {
     if (!fileMetadata) {
       return res.status(404).json({ error: 'File not found' });
     }
-  await fileMetadata.updateUploadProgress(progress);
-  // include collectionId and batchId to help clients filter events deterministically
-  broadcast({ type: 'UPLOAD_PROGRESS', fileId, progress, collectionId: fileMetadata.collection_id, batchId: fileMetadata.batch_id || null });
+    await fileMetadata.updateUploadProgress(progress);
+    // include collectionId and batchId to help clients filter events deterministically
+    broadcast({ type: 'UPLOAD_PROGRESS', fileId, progress, collectionId: fileMetadata.collection_id, batchId: fileMetadata.batch_id || null });
     res.json({ success: true });
   } catch (err) {
     logger.error('Error in updateUploadProgress:', err);
@@ -746,7 +755,7 @@ const reprocessLocks = new Set();
 
 export const reprocessFile = async (req, res) => {
   const { fileId } = req.params;
-  
+
   if (reprocessLocks.has(fileId)) {
     return res.status(409).json({ error: 'Reprocessing for this file is already in progress.' });
   }
@@ -760,14 +769,14 @@ export const reprocessFile = async (req, res) => {
     }
 
     if (!fileMetadata.cloud_storage_path_raw) {
-        return res.status(409).json({ error: 'Raw PDF deleted — cannot reprocess' });
+      return res.status(409).json({ error: 'Raw PDF deleted — cannot reprocess' });
     }
 
     const rawFileExists = await CloudStorageService.fileExists(fileMetadata.cloud_storage_path_raw);
     if (!rawFileExists) {
       return res.status(409).json({ error: 'Raw PDF deleted — cannot reprocess' });
     }
-    
+
     await fileMetadata.updateStatus('reprocessing');
     broadcast({ type: 'FILE_REPROCESSING_STARTED', fileId: fileMetadata.id, collectionId: fileMetadata.collection_id });
 
@@ -796,23 +805,29 @@ export const reprocessFile = async (req, res) => {
 
     // Insert new data (logic copied and adapted from main processing flow)
     const allPreProcessRecords = allRawRecords.map((record) => ({
-        collection_id: collectionIdNum,
-        full_name: `${record.first_name || ''} ${record.last_name || ''}`.trim(),
-        ...record,
-        processing_timestamp: processingTimestamp
+      collection_id: collectionIdNum,
+      full_name: `${record.first_name || ''} ${record.last_name || ''}`.trim(),
+      mobile: record.mobile,
+      email: record.email,
+      address: record.address,
+      dateofbirth: record.dateofbirth,
+      landline: record.landline,
+      lastseen: record.lastseen,
+      file_name: record.file_name,
+      processing_timestamp: processingTimestamp
     }));
 
     const allPostProcessRecords = allFilteredRecords.map((record) => ({
-        collection_id: collectionIdNum,
-        ...record,
-        full_name: `${record.first_name || ''} ${record.last_name || ''}`.trim(),
-        processing_timestamp: processingTimestamp
+      collection_id: collectionIdNum,
+      ...record,
+      full_name: `${record.first_name || ''} ${record.last_name || ''}`.trim(),
+      processing_timestamp: processingTimestamp
     }));
-    
+
     const allRemovedRecordsForDB = (allRemovedRecords || []).map((record) => ({
-        collection_id: collectionIdNum,
-        ...record,
-        processing_timestamp: processingTimestamp
+      collection_id: collectionIdNum,
+      ...record,
+      processing_timestamp: processingTimestamp
     }));
 
     await PreProcessRecord.bulkCreate(allPreProcessRecords);
@@ -844,7 +859,7 @@ export const reprocessFile = async (req, res) => {
   } catch (err) {
     logger.error('Error in reprocessFile:', err);
     const fileMetadata = await FileMetadata.findById(fileId);
-    if(fileMetadata) await fileMetadata.updateStatus('failed');
+    if (fileMetadata) await fileMetadata.updateStatus('failed');
     broadcast({ type: 'FILE_REPROCESSING_FAILED', fileId: fileId });
     res.status(500).json({ error: err.message });
   } finally {
@@ -853,17 +868,17 @@ export const reprocessFile = async (req, res) => {
 };
 
 export const downloadFile = (req, res) => {
-    const { session, file } = req.query;
-    if (!session || !file) {
-        return res.status(400).json({ error: "Session and file are required for download." });
+  const { session, file } = req.query;
+  if (!session || !file) {
+    return res.status(400).json({ error: "Session and file are required for download." });
+  }
+  const filePath = path.join(process.cwd(), "output", session, file);
+  res.download(filePath, (err) => {
+    if (err) {
+      logger.error("Error downloading file:", err);
+      res.status(500).json({ error: "Could not download the file." });
     }
-    const filePath = path.join(process.cwd(), "output", session, file);
-    res.download(filePath, (err) => {
-      if (err) {
-        logger.error("Error downloading file:", err);
-        res.status(500).json({ error: "Could not download the file." });
-      }
-    });
+  });
 };
 
 // FIXED: Excel Download with Proper Formatting
@@ -889,7 +904,7 @@ export const downloadCollectionFile = async (req, res, fileType) => {
       return res.status(404).json({ error: "No records found" });
     }
 
-  logger.info(`Exporting ${fileType.toUpperCase()}: ${records.length} records`);
+    logger.info(`Exporting ${fileType.toUpperCase()}: ${records.length} records`);
 
     const tempDir = path.join(process.cwd(), "temp", `collection-${collectionId}`);
     if (!fs.existsSync(tempDir)) {
@@ -926,7 +941,7 @@ export const downloadCollectionFile = async (req, res, fileType) => {
       // ⭐ SET COLUMN WIDTHS: Auto-fit columns
       const columnWidths = {};
       const headers = Object.keys(formattedRecords[0] || {});
-      
+
       headers.forEach(header => {
         // Min width 12, max width 30
         const maxLength = Math.max(
@@ -946,7 +961,7 @@ export const downloadCollectionFile = async (req, res, fileType) => {
 
       // Write file
       xlsx.writeFile(workbook, filePath);
-  logger.info(`Created ${fileName}: ${fs.statSync(filePath).size} bytes`);
+      logger.info(`Created ${fileName}: ${fs.statSync(filePath).size} bytes`);
 
     } else {
       // CSV export
@@ -955,17 +970,17 @@ export const downloadCollectionFile = async (req, res, fileType) => {
         header: Object.keys(records[0] || {}).map(key => ({ id: key, title: key }))
       });
       await csvWriter.writeRecords(records);
-  logger.info(`Created ${fileName}: ${fs.statSync(filePath).size} bytes`);
+      logger.info(`Created ${fileName}: ${fs.statSync(filePath).size} bytes`);
     }
 
     // Download file
-      res.download(filePath, `${collection.name}-${fileName}`, (err) => {
+    res.download(filePath, `${collection.name}-${fileName}`, (err) => {
       if (err) {
         logger.error("Error downloading file:", err.message);
       } else {
         logger.info(`Downloaded ${fileName}`);
       }
-      
+
       // Cleanup
       try {
         fs.unlinkSync(filePath);
@@ -974,7 +989,7 @@ export const downloadCollectionFile = async (req, res, fileType) => {
       }
     });
 
-    } catch (err) {
+  } catch (err) {
     logger.error(`Error in downloadCollectionFile:`, err);
     res.status(500).json({ error: err.message });
   }

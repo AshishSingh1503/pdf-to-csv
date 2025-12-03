@@ -44,377 +44,15 @@ try {
   logger.error("Failed to initialize Document AI client:", error);
 }
 
-// --- Pre-compiled Regex Patterns ---
-const REGEX_PATTERNS = {
-  addressStatePostcodeStart: /^\s*([A-Za-z]{2,3})\s+(\d{4})\s+(.+)$/i,
-  addressPostcodeStateEnd: /^\s*(\d{4})\s+(.+?)\s+([A-Za-z]{2,3})\s*$/i,
-  addressStatePostcodeMiddle: /^(.+?)\s+([A-Za-z]{2,3})\s+(\d{4})\s+(.+)$/i,
-  addressStatePostcodeAny: /([A-Za-z]{2,3})\s+(\d{4})/i,
-  nameInvalidChars: /[^A-Za-zÀ-ÖØ-öø-ÿ'\-\s]/g,
-  nameSpecialChars: /|･･･|…|•|\u2026/g,
-  dateInvalidChars: /[^0-9A-Za-z\s\-\/]/g,
-  dateFormat: /^(\d{1,2})([A-Za-z]{3,})(\d{4})$/,
-  dashNormalize: /[-\u2013\u2014]+/g,
-  dashMultiple: /-{2,}/g,
-  dashTrim: /^[\-\s]+|[\-\s]+$/g,
-  whitespaceMultiple: /\s+/g,
-  digitOnly: /\D/g,
-};
-
-// --- WORKER THREAD POOL MANAGEMENT ---
-class WorkerThreadPool {
-  constructor(poolSize) {
-    this.poolSize = poolSize;
-    this.workers = [];
-    this.taskQueue = [];
-    this.activeCount = 0;
-    this.initialize();
-  }
-
-  initialize() {
-    for (let i = 0; i < this.poolSize; i++) {
-      this.workers.push({
-        isAvailable: true,
-        worker: null, // Lazily initialized
-      });
-    }
-    logger.info(`Worker thread pool initialized with ${this.poolSize} slots`);
-  }
-
-  async runTask(task) {
-    return new Promise((resolve, reject) => {
-      const availableWorker = this.workers.find(w => w.isAvailable);
-
-      if (availableWorker) {
-        this.executeOnWorker(availableWorker, task, resolve, reject);
-      } else {
-        this.taskQueue.push({ task, resolve, reject });
-      }
-    });
-  }
-
-  executeOnWorker(workerSlot, task, resolve, reject) {
-    if (!workerSlot.worker) {
-      workerSlot.worker = new Worker(new URL('./validators.worker.js', import.meta.url));
-      workerSlot.worker.on('error', reject);
-      workerSlot.worker.on('exit', (code) => {
-        if (code !== 0) {
-          reject(new Error(`Worker exited with code ${code}`));
-        }
-      });
-    }
-
-    workerSlot.isAvailable = false;
-    this.activeCount++;
-
-    const timeout = setTimeout(() => {
-      reject(new Error('Worker task timeout'));
-      workerSlot.isAvailable = true;
-      this.activeCount--;
-      this.processQueue();
-    }, 60000); // 60s per worker task
-
-    workerSlot.worker.once('message', (result) => {
-      clearTimeout(timeout);
-      workerSlot.isAvailable = true;
-      this.activeCount--;
-
-      if (result.error) {
-        reject(new Error(result.error));
-      } else {
-        resolve(result);
-      }
-
-      this.processQueue();
-    });
-
-    workerSlot.worker.on('error', (error) => {
-      clearTimeout(timeout);
-      workerSlot.isAvailable = true;
-      this.activeCount--;
-      logger.error('Worker error:', error);
-      reject(error);
-      this.processQueue();
-    });
-
-    workerSlot.worker.postMessage(task);
-  }
-
-  processQueue() {
-    if (this.taskQueue.length > 0 && this.workers.some(w => w.isAvailable)) {
-      const { task, resolve, reject } = this.taskQueue.shift();
-      const availableWorker = this.workers.find(w => w.isAvailable);
-      this.executeOnWorker(availableWorker, task, resolve, reject);
-    }
-  }
-
-  async terminate() {
-    for (const workerSlot of this.workers) {
-      if (workerSlot.worker) {
-        try {
-          await workerSlot.worker.terminate();
-        } catch (err) {
-          logger.warn('Error terminating worker:', err.message);
-        }
-      }
-    }
-    logger.info('Worker thread pool terminated');
-  }
-}
-
-const parseFullName = (fullName) => {
-  if (!fullName) return { first: '', last: '' };
-
-  try {
-    const parts = fullName.trim().split(/\s+/);
-    return {
-      first: parts[0] || '',
-      last: parts.slice(1).join(' ') || ''
-    };
-  } catch (error) {
-    const parts = fullName.trim().split(/\s+/);
-    return {
-      first: parts[0] || '',
-      last: parts.slice(1).join(' ') || ''
-    };
-  }
-};
-
-const extractEntitiesSimple = (document) => {
-  const raw = document.entities || [];
-  return raw.map((entity, idx) => {
-    const type = (entity.type || '').toLowerCase().trim();
-    const value = String(entity.mentionText || entity.text || '').trim();
-
-    let startIndex = undefined;
-    let endIndex = undefined;
-    try {
-      const ta = entity.textAnchor || {};
-      const segs = ta.textSegments || (ta.textSegments === 0 ? [] : ta.textSegments);
-      if (Array.isArray(segs) && segs.length > 0) {
-        const seg = segs[0];
-        startIndex = seg.startIndex !== undefined ? Number(seg.startIndex) : undefined;
-        endIndex = seg.endIndex !== undefined ? Number(seg.endIndex) : undefined;
-      }
-    } catch (e) {
-      // non-fatal
-    }
-
-    let midY = null;
-    let midX = null;
-    let minY = null;
-    let maxY = null;
-    try {
-      const vertices = entity.pageAnchor?.pageRefs?.[0]?.boundingPoly?.normalizedVertices;
-      if (vertices && vertices.length >= 4) {
-        const ys = vertices.map(v => v.y || 0);
-        const xs = vertices.map(v => v.x || 0);
-        minY = Math.min(...ys);
-        maxY = Math.max(...ys);
-        const minX = Math.min(...xs);
-        midY = (minY + maxY) / 2;
-        midX = minX;
-      }
-    } catch (e) {
-      // non-fatal
-    }
-
-    return {
-      type,
-      value,
-      startIndex: Number.isFinite(startIndex) ? startIndex : null,
-      endIndex: Number.isFinite(endIndex) ? endIndex : null,
-      midY,
-      midX,
-      minY,
-      maxY,
-      __raw: entity,
-      __order: idx
-    };
-  }).filter(e => e.value);
-};
-
-// --- Parent/Child Entity Extraction Logic ---
-const extractRecordsFromParentEntities = (document) => {
-  const entities = document.entities || [];
-  const personRecords = entities.filter(e => e.type === 'person_record');
-
-  if (personRecords.length === 0) {
-    logger.warn('No person_record entities found.');
-    return [];
-  }
-
-  return personRecords.map(recordEntity => {
-    const properties = recordEntity.properties || [];
-    const record = {
-      first_name: '',
-      last_name: '',
-      mobile: '',
-      address: '',
-      email: '',
-      dateofbirth: '',
-      landline: '',
-      lastseen: ''
-    };
-
-    properties.forEach(prop => {
-      const type = (prop.type || '').toLowerCase().trim();
-      const value = String(prop.mentionText || prop.text || '').trim();
-
-      if (!value) return;
-
-      switch (type) {
-        case 'name':
-          const { first, last } = parseFullName(value);
-          record.first_name = first;
-          record.last_name = last;
-          break;
-        case 'mobile':
-          record.mobile = fixJumbledMobile(value);
-          break;
-        case 'address':
-          record.address = value;
-          break;
-        case 'email':
-          record.email = value;
-          break;
-        case 'dateofbirth':
-          record.dateofbirth = value;
-          break;
-        case 'landline':
-          record.landline = fixJumbledLandline(value);
-          break;
-        case 'lastseen':
-          record.lastseen = value;
-          break;
-      }
-    });
-
-    return record;
-  });
-};
-
-const _single_line_address = (address) => {
-  if (!address) return '';
-  let s = address.replace(/\r/g, ' ').replace(/\n/g, ' ');
-  s = s.replace(/[,;\|/]+/g, ' ');
-  s = s.replace(REGEX_PATTERNS.whitespaceMultiple, ' ').trim();
-  s = s.endsWith('.') ? s.slice(0, -1) : s;
-  return s;
-};
-
-const fixAddressOrdering = (address) => {
-  if (!address) return address;
-  let s = _single_line_address(address).trim();
-  let match;
-
-  match = s.match(REGEX_PATTERNS.addressStatePostcodeStart);
-  if (match) {
-    const [, state, postcode, rest] = match;
-    const out = `${rest.trim()} ${state.toUpperCase()} ${postcode}`;
-    return out.replace(REGEX_PATTERNS.whitespaceMultiple, ' ').trim();
-  }
-
-  match = s.match(REGEX_PATTERNS.addressPostcodeStateEnd);
-  if (match) {
-    const [, postcode, rest, state] = match;
-    const out = `${rest.trim()} ${state.toUpperCase()} ${postcode}`;
-    return out.replace(REGEX_PATTERNS.whitespaceMultiple, ' ').trim();
-  }
-
-  match = s.match(REGEX_PATTERNS.addressStatePostcodeMiddle);
-  if (match) {
-    const [, part1, state, postcode, part2] = match;
-    const out = `${part1.trim()} ${part2.trim()} ${state.toUpperCase()} ${postcode}`;
-    return out.replace(REGEX_PATTERNS.whitespaceMultiple, ' ').trim();
-  }
-
-  match = s.match(REGEX_PATTERNS.addressStatePostcodeAny);
-  if (match) {
-    const state = match[1].toUpperCase();
-    const postcode = match[2];
-    const rest = (s.substring(0, match.index) + s.substring(match.index + match[0].length)).trim();
-    const out = `${rest.replace(REGEX_PATTERNS.whitespaceMultiple, ' ')} ${state} ${postcode}`;
-    return out.trim();
-  }
-
-  return s;
-};
-
-const cleanName = (name) => {
-  if (!name) return '';
-  let s = name.trim();
-  s = s.replace(REGEX_PATTERNS.nameSpecialChars, '');
-  s = s.replace(/[\d?]+/g, '');
-  s = s.replace(REGEX_PATTERNS.nameInvalidChars, '');
-  s = s.replace(REGEX_PATTERNS.whitespaceMultiple, ' ').trim();
-  const parts = s ? s.split(' ').map(p => p.charAt(0).toUpperCase() + p.slice(1)) : [];
-  return parts.join(' ').trim();
-};
-
-const normalizeDateField = (dateStr) => {
-  if (!dateStr) return '';
-  let s = dateStr.trim();
-  s = s.replace(REGEX_PATTERNS.dashNormalize, '-');
-  s = s.replace(REGEX_PATTERNS.dashMultiple, '-');
-  s = s.replace(REGEX_PATTERNS.dashTrim, '');
-  s = s.replace(REGEX_PATTERNS.dateInvalidChars, '');
-  s = s.replace(/\./g, '-');
-
-  const match = s.match(REGEX_PATTERNS.dateFormat);
-  if (match) {
-    s = `${match[1]}-${match[2]}-${match[3]}`;
-  }
-
-  try {
-    const dt = new Date(s);
-    if (isNaN(dt.getTime())) return '';
-    const year = dt.getFullYear();
-    const month = String(dt.getMonth() + 1).padStart(2, '0');
-    const day = String(dt.getDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`;
-  } catch (e) {
-    return '';
-  }
-};
-
-const isValidLandline = (landline) => {
-  if (!landline) return false;
-  const digits = landline.replace(REGEX_PATTERNS.digitOnly, '');
-  return digits.length >= 10;
-};
-
-const fixJumbledMobile = (rawMobile) => {
-  if (!rawMobile) return '';
-  const clean = rawMobile.replace(/\s+/g, '');
-  if (/^04\d{8}$/.test(clean)) return clean;
-
-  const match = rawMobile.match(/(04\d{2})/);
-  if (match) {
-    const prefix = match[1];
-    const parts = rawMobile.split(prefix);
-    if (parts.length >= 2) {
-      const before = parts[0].replace(/\D/g, '');
-      const after = parts.slice(1).join('').replace(/\D/g, '');
-      const rotated = prefix + after + before;
-      if (/^04\d{8}$/.test(rotated)) return rotated;
-    }
-  }
-  return clean.replace(/\D/g, '');
-};
-
-const fixJumbledLandline = (rawLandline) => {
-  if (!rawLandline) return '';
-  const s = rawLandline.trim();
-  const parts = s.split(/\s+/);
-  if (parts.length === 3) {
-    const last = parts[2];
-    if (/^(0[2378])$/.test(last)) {
-      return parts.reverse().join(' ');
-    }
-  }
-  return s.replace(/\D/g, '');
-};
+import {
+  REGEX_PATTERNS,
+  fixAddressOrdering,
+  cleanName,
+  normalizeDateField,
+  isValidLandline,
+  fixJumbledMobile,
+  fixJumbledLandline
+} from "../utils/validators.js";
 
 // --- Exponential Backoff with Rate Limit Checking ---
 const retryWithBackoff = async (fn, maxRetries = RETRY_ATTEMPTS, initialDelay = INITIAL_BACKOFF_MS) => {
@@ -700,6 +338,21 @@ const cleanAndValidate = (records) => {
       continue;
     }
 
+    if (!address) {
+      rejectedRecords.push({
+        first_name: firstName,
+        last_name: lastName,
+        mobile,
+        address,
+        email,
+        dateofbirth,
+        landline: rawLandline,
+        lastseen,
+        rejection_reason: 'Missing address'
+      });
+      continue;
+    }
+
     const landline = isValidLandline(rawLandline) ? rawLandline.replace(REGEX_PATTERNS.digitOnly, '') : '';
     const full_name = `${firstName} ${lastName}`.trim();
 
@@ -790,17 +443,29 @@ export const processPDFs = async (pdfFiles, batchSize = 10, maxWorkers = 4) => {
       const tempPath = path.join(tempDir, file.name);
 
       try {
-        await file.mv(tempPath);
-        await checkPdfSize(tempPath, file.name);
+        let documentRequest = {
+          name: `projects/${config.projectId}/locations/${config.location}/processors/${config.processorId}`,
+        };
+
+        if (file.gcsUri) {
+          // Direct GCS processing
+          documentRequest.gcsDocument = {
+            gcsUri: file.gcsUri,
+            mimeType: "application/pdf"
+          };
+          logger.info(`Processing directly from GCS: ${file.gcsUri}`);
+        } else {
+          // Legacy/Local processing
+          await file.mv(tempPath);
+          await checkPdfSize(tempPath, file.name);
+          documentRequest.rawDocument = {
+            content: await readFileBuffered(tempPath),
+            mimeType: "application/pdf",
+          };
+        }
 
         const [result] = await retryWithBackoff(async () => {
-          return await client.processDocument({
-            name: `projects/${config.projectId}/locations/${config.location}/processors/${config.processorId}`,
-            rawDocument: {
-              content: await readFileBuffered(tempPath),
-              mimeType: "application/pdf",
-            },
-          });
+          return await client.processDocument(documentRequest);
         }, RETRY_ATTEMPTS, INITIAL_BACKOFF_MS);
 
         const rawRecords = extractRecordsFromParentEntities(result.document);
