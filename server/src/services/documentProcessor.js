@@ -234,85 +234,64 @@ const extractEntitiesSimple = (document) => {
   }).filter(e => e.value);
 };
 
-// --- Anchor-Based Clustering Logic ---
-const clusterByVerticalAnchors = (entities) => {
-  if (!Array.isArray(entities) || entities.length === 0) return [];
+// --- Parent/Child Entity Extraction Logic ---
+const extractRecordsFromParentEntities = (document) => {
+  const entities = document.entities || [];
+  const personRecords = entities.filter(e => e.type === 'person_record');
 
-  // 1. Extract Anchors (Names)
-  const anchors = entities
-    .filter(e => e.type === 'name')
-    .sort((a, b) => (a.minY || 0) - (b.minY || 0));
-
-  if (anchors.length === 0) {
-    logger.warn('No name anchors found. Falling back to empty records.');
+  if (personRecords.length === 0) {
+    logger.warn('No person_record entities found.');
     return [];
   }
 
-  // Initialize records with anchors
-  const records = anchors.map(anchor => {
-    const { first, last } = parseFullName(anchor.value);
-    return {
-      first_name: first,
-      last_name: last,
-      _anchorY: anchor.midY || 0,
-      _anchor: anchor,
-      mobile: null,
-      address: null,
-      email: null,
-      dateofbirth: null,
-      landline: null,
-      lastseen: null
-    };
-  });
-
-  // 2. Cluster Attributes by Vertical Proximity
-  const attributeTypes = ['mobile', 'address', 'email', 'dateofbirth', 'landline', 'lastseen'];
-  const attributes = entities.filter(e => attributeTypes.includes(e.type));
-
-  for (const attr of attributes) {
-    const attrY = attr.midY || 0;
-    let bestRecord = null;
-    let minDiff = Number.MAX_VALUE;
-
-    for (const record of records) {
-      const diff = Math.abs(attrY - record._anchorY);
-      if (diff < minDiff) {
-        minDiff = diff;
-        bestRecord = record;
-      }
-    }
-
-    if (bestRecord && minDiff < 0.2) {
-      const currentVal = bestRecord[attr.type];
-      const currentDistKey = `_dist_${attr.type}`;
-      const currentDist = bestRecord[currentDistKey] !== undefined ? bestRecord[currentDistKey] : Number.MAX_VALUE;
-
-      if (!currentVal || minDiff < currentDist) {
-        bestRecord[attr.type] = attr.value;
-        bestRecord[currentDistKey] = minDiff;
-      }
-    }
-  }
-
-  // 3. Final Cleanup and Formatting
-  return records.map(r => {
-    const finalRecord = {
-      first_name: r.first_name,
-      last_name: r.last_name,
-      mobile: fixJumbledMobile(r.mobile),
-      address: r.address,
-      email: r.email,
-      dateofbirth: r.dateofbirth,
-      landline: fixJumbledLandline(r.landline),
-      lastseen: r.lastseen
+  return personRecords.map(recordEntity => {
+    const properties = recordEntity.properties || [];
+    const record = {
+      first_name: '',
+      last_name: '',
+      mobile: '',
+      address: '',
+      email: '',
+      dateofbirth: '',
+      landline: '',
+      lastseen: ''
     };
 
-    return finalRecord;
-  });
-};
+    properties.forEach(prop => {
+      const type = (prop.type || '').toLowerCase().trim();
+      const value = String(prop.mentionText || prop.text || '').trim();
 
-const simpleGrouping = (entities) => {
-  return clusterByVerticalAnchors(entities);
+      if (!value) return;
+
+      switch (type) {
+        case 'name':
+          const { first, last } = parseFullName(value);
+          record.first_name = first;
+          record.last_name = last;
+          break;
+        case 'mobile':
+          record.mobile = fixJumbledMobile(value);
+          break;
+        case 'address':
+          record.address = value;
+          break;
+        case 'email':
+          record.email = value;
+          break;
+        case 'dateofbirth':
+          record.dateofbirth = value;
+          break;
+        case 'landline':
+          record.landline = fixJumbledLandline(value);
+          break;
+        case 'lastseen':
+          record.lastseen = value;
+          break;
+      }
+    });
+
+    return record;
+  });
 };
 
 const _single_line_address = (address) => {
@@ -824,8 +803,8 @@ export const processPDFs = async (pdfFiles, batchSize = 10, maxWorkers = 4) => {
           });
         }, RETRY_ATTEMPTS, INITIAL_BACKOFF_MS);
 
-        const entities = extractEntitiesSimple(result.document);
-        const rawRecords = simpleGrouping(entities);
+        const rawRecords = extractRecordsFromParentEntities(result.document);
+        const entities = result.document.entities || []; // Keep for JSON generation
 
         const { validRecords: filteredRecordsRaw, rejectedRecords: validationRejected } = await batchValidateRecords(rawRecords, 100);
 
@@ -833,7 +812,7 @@ export const processPDFs = async (pdfFiles, batchSize = 10, maxWorkers = 4) => {
         // 1. Group by mobile number
         const mobileGroups = new Map();
         const records = filteredRecordsRaw || [];
-        
+
         for (const record of records) {
           if (!record.mobile) continue; // Should be filtered already, but safety check
           if (!mobileGroups.has(record.mobile)) {
@@ -865,12 +844,12 @@ export const processPDFs = async (pdfFiles, batchSize = 10, maxWorkers = 4) => {
             // Find best record
             // Priority 1: Has Address
             const withAddress = group.filter(r => r.address && r.address.length > 5);
-            
+
             let candidates = withAddress.length > 0 ? withAddress : group;
-            
+
             // Priority 2: Most populated fields
             candidates.sort((a, b) => countPopulatedFields(b) - countPopulatedFields(a));
-            
+
             const winner = candidates[0];
             uniqueRecords.push(winner);
 
