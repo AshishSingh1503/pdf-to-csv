@@ -464,6 +464,136 @@ export const processPDFs = async (pdfFiles, batchSize = 10, maxWorkers = 4) => {
           };
         }
 
+        // --- Extraction Logic ---
+        // --- Extraction Logic ---
+        const extractRecordsFromParentEntities = (document) => {
+          const records = [];
+          const entities = document.entities || [];
+
+          // Helper to find a property by type within a parent entity
+          const findProperty = (properties, type) => {
+            return properties.find(p => p.type === type);
+          };
+
+          // Helper to get text value
+          const getText = (entity) => {
+            return entity ? (entity.mentionText || entity.mention_text || '').trim() : '';
+          };
+
+          // Helper to get normalized date
+          const getDate = (entity) => {
+            if (!entity) return '';
+            if (entity.normalizedValue && entity.normalizedValue.text) {
+              return entity.normalizedValue.text;
+            }
+            return getText(entity);
+          };
+
+          // Helper to check vertical overlap
+          const hasVerticalOverlap = (recordEntity, addressEntity) => {
+            if (!recordEntity.pageAnchor || !addressEntity.pageAnchor) return false;
+
+            const getYRange = (e) => {
+              if (!e.pageAnchor.pageRefs || !e.pageAnchor.pageRefs[0].boundingPoly) return [0, 0];
+              const vertices = e.pageAnchor.pageRefs[0].boundingPoly.normalizedVertices;
+              if (!vertices) return [0, 0];
+              const yMin = Math.min(...vertices.map(v => v.y));
+              const yMax = Math.max(...vertices.map(v => v.y));
+              return [yMin, yMax];
+            };
+
+            const [rMin, rMax] = getYRange(recordEntity);
+            const [aMin, aMax] = getYRange(addressEntity);
+
+            // Check if address is roughly within the record's vertical span
+            // Expand record span slightly to be generous
+            const buffer = 0.02;
+            return (aMin >= rMin - buffer && aMax <= rMax + buffer) ||
+              (aMin <= rMax + buffer && aMax >= rMin - buffer); // Any overlap
+          };
+
+          const allAddresses = [];
+          const collectAddresses = (ents) => {
+            if (!ents) return;
+            ents.forEach(e => {
+              if (e.type && e.type.toLowerCase() === 'address') {
+                allAddresses.push(e);
+              }
+              if (e.properties) {
+                collectAddresses(e.properties);
+              }
+            });
+          };
+          collectAddresses(entities);
+
+          const usedAddressIds = new Set();
+
+          entities.forEach(entity => {
+            if (entity.type === 'person_record') {
+              const props = entity.properties || [];
+
+              const nameEntity = findProperty(props, 'Name');
+              const addressEntity = findProperty(props, 'Address');
+              const mobileEntity = findProperty(props, 'Mobile');
+              const emailEntity = findProperty(props, 'email');
+              const dobEntity = findProperty(props, 'DateofBirth');
+              const landlineEntity = findProperty(props, 'landline');
+              const lastseenEntity = findProperty(props, 'lastseen');
+
+              if (addressEntity) usedAddressIds.add(addressEntity.id);
+
+              // Parse Name
+              const fullName = getText(nameEntity);
+              let firstName = '';
+              let lastName = '';
+              if (fullName) {
+                const parts = fullName.split(' ');
+                if (parts.length > 0) firstName = parts[0];
+                if (parts.length > 1) lastName = parts.slice(1).join(' ');
+              }
+
+              const record = {
+                first_name: firstName,
+                last_name: lastName,
+                address: getText(addressEntity),
+                mobile: getText(mobileEntity),
+                email: getText(emailEntity),
+                dateofbirth: getDate(dobEntity),
+                landline: getText(landlineEntity),
+                lastseen: getDate(lastseenEntity),
+                _entity: entity // Keep reference for recovery
+              };
+
+              records.push(record);
+            }
+          });
+
+          // Recovery Logic: Try to assign unused addresses to records missing an address
+          const unusedAddresses = allAddresses.filter(a => !usedAddressIds.has(a.id));
+
+          if (unusedAddresses.length > 0) {
+            logger.info(`Found ${unusedAddresses.length} unused Address entities. Attempting recovery...`);
+
+            records.forEach(record => {
+              if (!record.address && record._entity) {
+                // Find best matching unused address
+                const bestMatch = unusedAddresses.find(addr => hasVerticalOverlap(record._entity, addr));
+
+                if (bestMatch) {
+                  const recoveredAddress = getText(bestMatch);
+                  logger.info(`Recovered address for ${record.first_name} ${record.last_name}: ${recoveredAddress}`);
+                  record.address = recoveredAddress;
+                }
+              }
+              delete record._entity; // Cleanup
+            });
+          } else {
+            records.forEach(r => delete r._entity);
+          }
+
+          return records;
+        };
+
         const [result] = await retryWithBackoff(async () => {
           return await client.processDocument(documentRequest);
         }, RETRY_ATTEMPTS, INITIAL_BACKOFF_MS);
