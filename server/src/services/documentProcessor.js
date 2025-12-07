@@ -148,6 +148,10 @@ export const batchInsertRecords = async (records, dbClient, batchSize = BATCH_SI
 
 const readFileBuffered = async (tempPath) => {
   try {
+    const stats = await fsPromises.stat(tempPath);
+    if (!stats.isFile()) {
+      throw new Error(`Path is not a file: ${tempPath}`);
+    }
     return await fsPromises.readFile(tempPath);
   } catch (error) {
     logger.error(`Failed to read file ${tempPath}:`, error.message);
@@ -440,7 +444,15 @@ export const processPDFs = async (pdfFiles, batchSize = 10, maxWorkers = 4) => {
     if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
 
     const processFile = async (file, index) => {
+      if (!file.name || file.name.trim() === '' || file.name === '.') {
+        file.name = `unnamed_${Date.now()}_${Math.random().toString(36).substr(2, 5)}.pdf`;
+        logger.warn(`File name was invalid, generated fallback: ${file.name}`);
+      }
+      // Sanitize filename to prevent directory traversal
+      file.name = path.basename(file.name);
+
       const tempPath = path.join(tempDir, file.name);
+      logger.info(`Processing file: ${file.name}, tempPath: ${tempPath}`);
 
       try {
         let documentRequest = {
