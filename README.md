@@ -1,137 +1,122 @@
-# PDF to CSV/DB Data Extractor
+# PDF to CSV Converter
 
-![License](https://img.shields.io/badge/license-ISC-blue.svg)
-![Node.js](https://img.shields.io/badge/node-%3E%3D18.0.0-green.svg)
-![React](https://img.shields.io/badge/react-%5E19.0.0-blue.svg)
-![PostgreSQL](https://img.shields.io/badge/postgres-%5E14.0-blue.svg)
+This project is a full-stack application designed to process PDF documents using Google Cloud Document AI, extract structured data (specifically person records), validate and clean the data, and export it to CSV format.
 
-A production-grade, high-performance application designed to extract structured data from complex PDF documents using Google Cloud Document AI and store it efficiently in a PostgreSQL database.
+## Table of Contents
+- [Overview](#overview)
+- [Architecture](#architecture)
+- [Data Flow](#data-flow)
+- [Key Components](#key-components)
+  - [Server](#server)
+  - [Client](#client)
+- [Setup & Usage](#setup--usage)
 
-## 🚀 Features
+## Overview
 
-*   **Advanced AI Extraction**: Leverages Google Document AI to parse unstructured PDF documents with high accuracy.
-*   **Parent/Child Entity Support**: Handles complex nested data structures (e.g., multiple records per page) using parent `person_record` entities.
-*   **Robust Data Validation**: Enforces strict validation rules for fields like mobile numbers (Australian format), dates, and addresses.
-*   **High Performance Architecture**:
-    *   **Parallel Processing**: Utilizes Node.js worker threads for CPU-intensive validation tasks.
-    *   **Batch Database Operations**: Optimized bulk inserts to handle high throughput.
-    *   **Scalable**: Configurable for high-resource environments (e.g., 8 vCPU / 64GB RAM).
-*   **Duplicate Detection**: Optional logic to prevent duplicate records based on unique identifiers (e.g., mobile number).
-*   **Modern Web Interface**: A responsive React-based frontend (Vite + Tailwind CSS) for easy file uploads and real-time status monitoring.
-*   **Cloud Ready**: Dockerized and optimized for deployment on Google Cloud Run.
+The application automates the extraction of contact information (Name, Address, Mobile, Email, etc.) from PDF files. It handles:
+- **Batch Processing**: Upload multiple PDFs at once.
+- **AI Extraction**: Uses Google Cloud Document AI to parse unstructured text.
+- **Intelligent Parsing**: Custom logic to handle parent/child entity relationships and recover "orphaned" data (e.g., addresses not directly linked to a person).
+- **Validation**: Parallelized validation using worker threads to ensure data quality.
+- **Deduplication**: Merges duplicate records based on mobile numbers, prioritizing the most complete data.
 
-## 🏗 Architecture
+## Architecture
 
-The application follows a modern 3-tier architecture:
+The project is a Monorepo containing:
+- **Client**: A React application (Vite + Tailwind CSS) for the user interface.
+- **Server**: An Express.js Node.js server that handles the core business logic, API endpoints, and integration with Google Cloud.
+- **Database**: Uses a SQL database (likely PostgreSQL or MySQL based on `models`) to store extracted data.
 
-1.  **Frontend**: React application built with Vite and Tailwind CSS. Handles file uploads and displays processing status via WebSockets.
-2.  **Backend**: Node.js (Express) server. Manages API endpoints, orchestrates Document AI processing, and handles database interactions.
-3.  **Database**: PostgreSQL database for persistent storage of extracted records and file metadata.
-4.  **AI Service**: Google Cloud Document AI for OCR and entity extraction.
+## Data Flow
 
-## 🛠 Prerequisites
+1.  **Upload**:
+    *   User selects PDF files in the Client.
+    *   Files are uploaded to the Server via the `/api/documents/upload` endpoint.
+    *   The `DocumentController` receives the files and initiates the processing job.
 
-Before running the application, ensure you have the following:
+2.  **Processing (`documentProcessor.js`)**:
+    *   The server processes files in batches.
+    *   **Document AI**: Each PDF is sent to Google Cloud Document AI.
+    *   **Extraction**: The `extractRecordsFromParentEntities` function parses the AI response.
+        *   It identifies `person_record` entities.
+        *   It extracts properties like Name, Address, Mobile, etc.
+        *   **Recovery**: It attempts to find "orphaned" Address entities (detected by the AI but not linked) and assigns them to the nearest person record based on vertical proximity.
 
-*   **Node.js** (v18 or higher)
-*   **PostgreSQL** (v14 or higher)
-*   **Google Cloud Project** with:
-    *   Document AI API enabled.
-    *   A Service Account with `Document AI Processor User` and `Storage Object Admin` roles.
-    *   A configured Document AI Processor (Custom Extractor).
+3.  **Validation (`validations.worker.js`)**:
+    *   Extracted records are sent to a worker thread pool for parallel validation.
+    *   The `validators.js` utility cleans names, formats addresses, validates emails/phones, and normalizes dates.
+    *   Invalid records are flagged or rejected.
 
-## 📦 Installation
+4.  **Deduplication & Storage**:
+    *   Valid records are grouped by Mobile number.
+    *   Duplicates are merged, keeping the most complete information.
+    *   Finalized records are saved to the database.
 
-1.  **Clone the repository**:
+5.  **Export**:
+    *   Users can view and export the processed data as CSV files via the Client.
+
+## Key Components
+
+### Server (`server/src`)
+
+*   **`app.js`**: Main entry point. Sets up Express, middleware (CORS, file upload), and routes.
+*   **`routes/`**: Defines API endpoints.
+    *   `documentRoutes.js`: Handles file uploads and processing status.
+    *   `dataRoutes.js`: Retrieval of processed data.
+*   **`controllers/`**:
+    *   `documentController.js`: Manages the upload request, interacts with the processor, and handles responses.
+*   **`services/`**:
+    *   `documentProcessor.js`: **Core Logic**. Handles Document AI interaction, entity extraction, and orchestration of validation.
+    *   `validations.worker.js`: Worker thread script for CPU-intensive validation tasks.
+*   **`utils/`**:
+    *   `validators.js`: Shared validation and cleaning functions (e.g., `cleanName`, `validateEmail`).
+    *   `logger.js`: Centralized logging configuration.
+
+### Client (`client/`)
+
+*   Built with **React** and **Vite**.
+*   Uses **Tailwind CSS** for styling.
+*   Provides a dashboard for uploading files, monitoring progress, and downloading results.
+
+## Setup & Usage
+
+### Prerequisites
+- Node.js (v16+ recommended)
+- Google Cloud Platform account with Document AI enabled.
+- Database (PostgreSQL/MySQL) running.
+
+### Environment Variables
+Create a `.env` file in the `server` directory with:
+- `PORT`: Server port (default 3000)
+- `DB_URI`: Database connection string
+- `GOOGLE_APPLICATION_CREDENTIALS`: Path to GCP service account key
+- `GCP_PROJECT_ID`: Google Cloud Project ID
+- `GCP_LOCATION`: Document AI location (e.g., `us`)
+- `GCP_PROCESSOR_ID`: Document AI Processor ID
+
+### Running the Project
+
+1.  **Install Dependencies**:
     ```bash
-    git clone <repository-url>
-    cd pdf-to-csv
-    ```
-
-2.  **Install Backend Dependencies**:
-    ```bash
+    # Server
     cd server
     npm install
-    ```
 
-3.  **Install Frontend Dependencies**:
-    ```bash
+    # Client
     cd ../client
     npm install
     ```
 
-## ⚙️ Configuration
-
-The application is configured using environment variables.
-
-1.  **Backend Configuration**:
-    Create a `.env` file in the `server` directory (copy from `.env.example` or `config.env`).
-
-    **Key Variables:**
-    *   `PORT`: Server port (default: 5000).
-    *   `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`: Database connection details.
-    *   `PROJECT_ID`: Google Cloud Project ID.
-    *   `LOCATION`: Google Cloud Location (e.g., `us`).
-    *   `PROCESSOR_ID`: Document AI Processor ID.
-    *   `GOOGLE_APPLICATION_CREDENTIALS`: Path to your Service Account JSON key.
-
-2.  **Frontend Configuration**:
-    Create a `.env` file in the `client` directory if needed (e.g., for API URL overrides).
-
-## 🚀 Usage
-
-### Local Development
-
-1.  **Start the Database**:
-    Ensure your PostgreSQL instance is running. You can initialize the schema using the provided SQL script:
-    ```bash
-    psql -U <username> -d <dbname> -f setup_new_db.sql
-    ```
-
-2.  **Start the Backend**:
+2.  **Start Server**:
     ```bash
     cd server
     npm start
     ```
 
-3.  **Start the Frontend**:
+3.  **Start Client**:
     ```bash
     cd client
     npm run dev
     ```
-    Access the application at `http://localhost:5173`.
 
-### Deployment (Google Cloud Run)
-
-The application is designed to be deployed to Google Cloud Run.
-
-1.  **Build and Deploy**:
-    Use the provided `deploy.sh` script or `gcloud` commands to build the container image and deploy it to Cloud Run.
-    ```bash
-    ./deploy.sh
-    ```
-    *Note: Ensure you have the Google Cloud SDK installed and authenticated.*
-
-## 📚 API Documentation
-
-### `POST /api/upload`
-Uploads one or more PDF files for processing.
-*   **Body**: `multipart/form-data` with `files` field.
-*   **Response**: JSON object containing processing results and job ID.
-
-### `GET /api/status`
-Retrieves the status of the system or specific jobs.
-
-## 🤝 Contributing
-
-Contributions are welcome! Please follow these steps:
-
-1.  Fork the repository.
-2.  Create a new branch (`git checkout -b feature/amazing-feature`).
-3.  Commit your changes (`git commit -m 'Add some amazing feature'`).
-4.  Push to the branch (`git push origin feature/amazing-feature`).
-5.  Open a Pull Request.
-
-## 📄 License
-
-This project is licensed under the ISC License.
+4.  **Access**: Open `http://localhost:5173` (or the port shown in client terminal).
