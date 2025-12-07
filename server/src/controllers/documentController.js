@@ -213,6 +213,8 @@ export const processDocuments = async (req, res) => {
 
     const fileArray = Array.isArray(files) ? files : [files];
 
+    logger.info(`Received ${fileArray.length} files. Details: ${JSON.stringify(fileArray.map(f => ({ name: f.name, size: f.size, mimetype: f.mimetype, md5: f.md5 })), null, 2)}`);
+
     // generate a unique batch id (use crypto.randomUUID when available)
     const batchId = (crypto && typeof crypto.randomUUID === 'function')
       ? crypto.randomUUID()
@@ -401,6 +403,7 @@ const processPDFFilesParallel = async (fileArray, collectionIdNum, fileMetadatas
     }
 
     logger.info(`Starting parallel processing for ${filesToProcess.length} files...`);
+    logger.info(`Files to process metadata: ${JSON.stringify(filesToProcess.map(f => ({ name: f.name, original: f.original_filename, rawPath: f.cloud_storage_path_raw, tempPath: f.tempPath })), null, 2)}`);
 
     // Emit initial batch progress and start heartbeat
     try {

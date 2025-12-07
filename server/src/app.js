@@ -12,16 +12,20 @@ import logger from './utils/logger.js';
 
 const app = express();
 
-const allowedOrigins = [
-  "https://pdf2csv-frontend-805037964827.us-central1.run.app",
-  "http://localhost:5173",
-];
+const allowedOrigins = process.env.ALLOWED_ORIGINS
+  ? process.env.ALLOWED_ORIGINS.split(',')
+  : [
+    "https://pdf2csv-frontend-805037964827.us-central1.run.app",
+    "http://localhost:5173",
+  ];
 
 const corsOptions = {
   origin: (origin, callback) => {
+    logger.info(`CORS Check: Origin=${origin}`);
     if (allowedOrigins.includes(origin) || !origin) {
       callback(null, true);
     } else {
+      logger.warn(`CORS Blocked: Origin=${origin} is not in allowed list: ${allowedOrigins.join(', ')}`);
       callback(new Error("Not allowed by CORS"));
     }
   },

@@ -5,7 +5,13 @@ import fs from "fs";
 import logger from '../utils/logger.js';
 import os from 'os';
 
-dotenv.config();
+const envConfig = dotenv.config();
+if (envConfig.error) {
+  logger.error('Error loading .env file:', envConfig.error);
+} else {
+  logger.info('Parsed .env file successfully.');
+}
+logger.info(`Env Check: GOOGLE_APPLICATION_CREDENTIALS=${process.env.GOOGLE_APPLICATION_CREDENTIALS}`);
 
 // Queue configuration parsing & validation - centralize defaults and clamps
 let _maxConcurrentBatches = parseInt(process.env.MAX_CONCURRENT_BATCHES, 10);
@@ -81,10 +87,25 @@ const credentialsPath = path.resolve(process.env.GOOGLE_APPLICATION_CREDENTIALS 
 const outputPath = path.resolve(process.env.OUTPUT_DIR || "output");
 
 // ✅ Check if credentials file exists (only in development)
-if (process.env.NODE_ENV !== 'production' && !fs.existsSync(credentialsPath)) {
-  logger.error(`Google credentials file not found at: ${credentialsPath}`);
-  logger.error("Please set GOOGLE_APPLICATION_CREDENTIALS in your .env file correctly.");
-  process.exit(1);
+// ✅ Check if credentials file exists (only in development)
+if (process.env.NODE_ENV !== 'production') {
+  if (!process.env.GOOGLE_APPLICATION_CREDENTIALS) {
+    logger.error("GOOGLE_APPLICATION_CREDENTIALS environment variable is missing or empty.");
+    process.exit(1);
+  }
+
+  if (!fs.existsSync(credentialsPath)) {
+    logger.error(`Google credentials file not found at: ${credentialsPath}`);
+    logger.error("Please set GOOGLE_APPLICATION_CREDENTIALS in your .env file correctly.");
+    process.exit(1);
+  }
+
+  const stats = fs.statSync(credentialsPath);
+  if (stats.isDirectory()) {
+    logger.error(`GOOGLE_APPLICATION_CREDENTIALS points to a directory, not a file: ${credentialsPath}`);
+    logger.error("Please point it to your JSON key file.");
+    process.exit(1);
+  }
 }
 
 export const config = {
