@@ -697,7 +697,7 @@ export const processPDFs = async (pdfFiles, batchSize = 10, maxWorkers = 4) => {
           postProcessingJson,
         };
       } catch (fileError) {
-        logger.error(`Error processing file ${file.name}`, fileError && fileError.message);
+        logger.error(`Error processing file ${file.name}: ${fileError && fileError.message}`, fileError);
         return {
           rawRecords: [],
           filteredRecords: [],
