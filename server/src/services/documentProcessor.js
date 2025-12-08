@@ -352,7 +352,7 @@ const cleanAndValidate = (records) => {
         dateofbirth,
         landline: rawLandline,
         lastseen,
-        rejection_reason: 'Missing address'
+        rejection_reason: 'Unable to validate address'
       });
       continue;
     }
