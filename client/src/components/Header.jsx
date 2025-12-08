@@ -11,18 +11,18 @@ const Header = ({ customer, onUploadClick, selectedCollection, onToggleSidebar, 
         <h1 className="text-lg sm:text-xl font-semibold">Document Processor</h1>
         <div className="flex flex-wrap items-center gap-2 sm:gap-4">
           {/* Customers toggle (visible on small screens) */}
-          <button
+          {/* <button
             onClick={onToggleCustomersSidebar}
             className="bg-transparent text-slate-700 dark:text-slate-200 px-2 py-1 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-blue-500 active:scale-95 transition-transform"
             aria-label="Toggle customers sidebar"
           >
             Customers
-          </button>
-          {customer && (
+          </button> */}
+          {/* {customer && (
             <select className="border rounded px-2 py-1 bg-white dark:bg-slate-700 text-slate-900 dark:text-slate-100 border-gray-300 dark:border-slate-600">
               <option>{customer.name}</option>
             </select>
-          )}
+          )} */}
           <button
             className="bg-slate-600 text-white px-3 sm:px-4 py-2 rounded hover:bg-slate-700 dark:bg-slate-700 dark:hover:bg-slate-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-blue-500 active:scale-95 transition-transform"
             onClick={onToggleSidebar}
