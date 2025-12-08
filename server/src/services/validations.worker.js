@@ -131,17 +131,18 @@ const cleanAndValidateRecords = (records, patterns) => {
 
 // --- Worker Message Handler ---
 
-self.onmessage = ({ data }) => {
-  try {
-    if (data.type === 'validate') {
-      // We ignore data.patterns now as we use the shared module
-      const result = cleanAndValidateRecords(data.records, data.patterns);
-      // Send the filtered (but not yet unique) records back with rejected records
-      self.postMessage(result);
-    }
-  } catch (error) {
-    self.postMessage({ error: error.message, stack: error.stack });
-  }
-};
+// --- Worker Message Handler ---
+import { parentPort } from 'worker_threads';
 
-// --- END: validators.worker.js ---
+if (parentPort) {
+  parentPort.on('message', (data) => {
+    try {
+      if (data.type === 'validate') {
+        const result = cleanAndValidateRecords(data.records, data.patterns);
+        parentPort.postMessage(result);
+      }
+    } catch (error) {
+      parentPort.postMessage({ error: error.message, stack: error.stack });
+    }
+  });
+}

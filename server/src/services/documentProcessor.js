@@ -3,7 +3,7 @@ import { config } from "../config/index.js";
 import logger from "../utils/logger.js";
 import path from "path";
 import pLimit from "p-limit";
-import { Worker } from "worker_threads";
+import { WorkerThreadPool } from "../utils/workerThreadPool.js";
 import os from "os";
 import { promises as fsPromises } from "fs";
 import fs from "fs";
