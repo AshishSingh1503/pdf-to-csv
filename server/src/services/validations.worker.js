@@ -4,7 +4,9 @@ import {
   fixAddressOrdering,
   cleanName,
   normalizeDateField,
-  isValidLandline
+  isValidLandline,
+  fixJumbledMobile,
+  fixJumbledLandline
 } from "../utils/validators.js";
 
 // --- Main Validation Function ---
@@ -22,17 +24,15 @@ const cleanAndValidateRecords = (records, patterns) => {
 
     // Note: patterns argument is now redundant for imported functions but kept for compatibility if needed
     // However, the imported functions use the imported REGEX_PATTERNS, so we don't need to pass patterns to them.
-    // But wait, the worker receives 'patterns' in the message.
-    // The imported functions in validators.js use the REGEX_PATTERNS defined in validators.js.
     // So we can just call them without patterns.
 
     const firstName = cleanName(rawFirst);
     const lastName = cleanName(rawLast);
 
-    const mobile = String(record.mobile || '').trim();
+    const mobile = fixJumbledMobile(String(record.mobile || '').trim());
     let address = String(record.address || '').trim();
     const email = String(record.email || '').trim();
-    const rawLandline = String(record.landline || '').trim();
+    const rawLandline = fixJumbledLandline(String(record.landline || '').trim());
 
     address = fixAddressOrdering(address);
 
@@ -131,7 +131,6 @@ const cleanAndValidateRecords = (records, patterns) => {
 
 // --- Worker Message Handler ---
 
-// --- Worker Message Handler ---
 import { parentPort } from 'worker_threads';
 
 if (parentPort) {
