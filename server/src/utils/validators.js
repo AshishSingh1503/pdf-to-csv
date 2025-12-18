@@ -75,10 +75,17 @@ export const cleanName = (name) => {
 export const normalizeDateField = (dateStr) => {
     if (!dateStr) return '';
     let s = dateStr.trim();
+    // 1. Replace common separators (dot, slash, space) with dash
+    s = s.replace(/[\.\/\s]+/g, '-');
+
+    // 2. Insert dash between Digit-Letter and Letter-Digit
+    s = s.replace(/(\d)([A-Za-z])/g, '$1-$2');
+    s = s.replace(/([A-Za-z])(\d)/g, '$1-$2');
+
+    // 3. Normalize dashes (clean up duplicates and non-standard dashes)
     s = s.replace(REGEX_PATTERNS.dashNormalize, '-');
     s = s.replace(REGEX_PATTERNS.dashMultiple, '-');
     s = s.replace(REGEX_PATTERNS.dashTrim, '');
-    s = s.replace(/\./g, '-');
     // NOTE: We do NOT strip all "invalid" chars because we want strict structure.
     // Assuming dateInvalidChars might be too aggressive or not aggressive enough, 
     // but for strict validation we rely on specific regex matches below.
