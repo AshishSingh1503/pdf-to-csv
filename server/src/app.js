@@ -15,7 +15,7 @@ const app = express();
 const allowedOrigins = process.env.ALLOWED_ORIGINS
   ? process.env.ALLOWED_ORIGINS.split(',')
   : [
-    "https://pdf2csv-frontend-805037964827.us-central1.run.app",
+    "https://pdf2csv-frontend-2xcfwc7m6a-uc.a.run.app",
     "http://localhost:5173",
   ];
 
