@@ -51,7 +51,8 @@ import {
   normalizeDateField,
   isValidLandline,
   fixJumbledMobile,
-  fixJumbledLandline
+  fixJumbledLandline,
+  validateRecords
 } from "../utils/validators.js";
 
 // --- Exponential Backoff with Rate Limit Checking ---
@@ -245,7 +246,7 @@ const batchValidateRecords = async (records, batchSize = 100) => {
   }));
 
   if (prepped.length <= batchSize || !workerThreadPool) {
-    return cleanAndValidate(prepped);
+    return validateRecords(prepped);
   }
 
   const batches = [];
@@ -269,111 +270,8 @@ const batchValidateRecords = async (records, batchSize = 100) => {
     return { validRecords: allValid, rejectedRecords: allRejected };
   } catch (error) {
     logger.warn('Worker thread validation failed, falling back to main thread:', error.message);
-    return cleanAndValidate(prepped);
+    return validateRecords(prepped);
   }
-};
-
-const cleanAndValidate = (records) => {
-  const cleanRecords = [];
-  const rejectedRecords = [];
-
-  for (const record of records) {
-    const rawFirst = String(record.first_name || '').trim();
-    const rawLast = String(record.last_name || '').trim();
-    const rawDob = String(record.dateofbirth || '').trim();
-    const rawLastseen = String(record.lastseen || '').trim();
-
-    const firstName = cleanName(rawFirst);
-    const lastName = cleanName(rawLast);
-
-    const mobile = String(record.mobile || '').trim();
-    let address = String(record.address || '').trim();
-    const email = String(record.email || '').trim();
-    const rawLandline = String(record.landline || '').trim();
-
-    address = fixAddressOrdering(address);
-
-    const dateofbirth = normalizeDateField(rawDob);
-    const lastseen = normalizeDateField(rawLastseen);
-
-    if (!firstName || firstName.length <= 1) {
-      rejectedRecords.push({
-        first_name: firstName,
-        last_name: lastName,
-        mobile,
-        address,
-        email,
-        dateofbirth,
-        landline: rawLandline,
-        lastseen,
-        rejection_reason: 'Invalid name'
-      });
-      continue;
-    }
-
-    if (!mobile) {
-      rejectedRecords.push({
-        first_name: firstName,
-        last_name: lastName,
-        mobile,
-        address,
-        email,
-        dateofbirth,
-        landline: rawLandline,
-        lastseen,
-        rejection_reason: 'Missing mobile number'
-      });
-      continue;
-    }
-
-    const mobileDigits = mobile.replace(REGEX_PATTERNS.digitOnly, '');
-    if (!(mobileDigits.length === 10 && mobileDigits.startsWith('04'))) {
-      rejectedRecords.push({
-        first_name: firstName,
-        last_name: lastName,
-        mobile,
-        address,
-        email,
-        dateofbirth,
-        landline: rawLandline,
-        lastseen,
-        rejection_reason: 'Invalid mobile number'
-      });
-      continue;
-    }
-
-    if (!address) {
-      rejectedRecords.push({
-        first_name: firstName,
-        last_name: lastName,
-        mobile,
-        address,
-        email,
-        dateofbirth,
-        landline: rawLandline,
-        lastseen,
-        rejection_reason: 'Unable to validate address'
-      });
-      continue;
-    }
-
-    const landline = isValidLandline(rawLandline) ? rawLandline.replace(REGEX_PATTERNS.digitOnly, '') : '';
-    const full_name = `${firstName} ${lastName}`.trim();
-
-    cleanRecords.push({
-      full_name: full_name,
-      first_name: firstName,
-      last_name: lastName,
-      dateofbirth: dateofbirth || '',
-      address: address,
-      mobile: mobileDigits,
-      email: email || '',
-      landline: landline,
-      lastseen: lastseen || '',
-    });
-  }
-
-  return { validRecords: cleanRecords, rejectedRecords };
 };
 
 const checkPdfSize = async (filePath, fileName) => {
@@ -496,47 +394,19 @@ export const processPDFs = async (pdfFiles, batchSize = 10, maxWorkers = 4) => {
           const getDate = (entity) => {
             if (!entity) return '';
 
-            // 1. Try normalized value first
+            // 1. Try normalized value first, ONLY if complete (YYYY-MM-DD)
             if (entity.normalizedValue && entity.normalizedValue.text) {
-              return entity.normalizedValue.text;
+              const val = entity.normalizedValue.text;
+              if (/^\d{4}-\d{2}-\d{2}$/.test(val)) {
+                return val;
+              }
+              // If incomplete (e.g. --08-14), fallback to mentionText
             }
 
             // 2. Try mention text
             let text = getText(entity);
 
-            // 3. "Look Left" Algorithm
-            // If text starts with a month (alpha) and we have text anchors, look behind for digits
-            // Regex to check if text starts with a month name (approximate)
-            // We'll trust the validator to strict check, just heuristic here.
-            // Actually, we can just always look left if it doesn't start with a digit? 
-            // Or just always look left to see if we missed the day.
 
-            try {
-              if (!/^\d/.test(text) && entity.textAnchor && entity.textAnchor.textSegments && entity.textAnchor.textSegments.length > 0) {
-                const startIndex = parseInt(entity.textAnchor.textSegments[0].startIndex || '0', 10);
-
-                // Look back up to 10 chars
-                const lookBackAmount = 10;
-                const lookBackStart = Math.max(0, startIndex - lookBackAmount);
-
-                // Get the preceding text
-                const prefix = rawText.slice(lookBackStart, startIndex);
-
-                // Check for pattern: Digits + [Separator] at the very end of prefix
-                // Examples: "12-", "05 ", "31/"
-                // Regex: (\d{1,2})[-\s/.]+$
-                const match = prefix.match(/(\d{1,2})[-\s/.]+$/);
-
-                if (match) {
-                  const missingDay = match[1];
-                  logger.info(`[Look Left] Recovered missing day '${missingDay}' for DOB '${text}'`);
-                  // Combine: "12" + "-" + "Aug-1990" (validator handles separators)
-                  text = `${missingDay}-${text}`;
-                }
-              }
-            } catch (err) {
-              logger.warn(`Error in Look Left algorithm: ${err.message}`);
-            }
 
             return text;
           };
@@ -727,19 +597,7 @@ export const processPDFs = async (pdfFiles, batchSize = 10, maxWorkers = 4) => {
           file.name
         );
 
-        // --- DEBUG OUTPUT ---
-        try {
-          const debugDir = path.join(process.cwd(), "debug_output");
-          if (!fs.existsSync(debugDir)) {
-            await fsPromises.mkdir(debugDir, { recursive: true });
-          }
-          const debugFile = path.join(debugDir, `${file.name.replace('.pdf', '')}_debug.json`);
-          await fsPromises.writeFile(debugFile, JSON.stringify(preProcessingJson, null, 2));
-          logger.info(`Debug JSON saved to ${debugFile}`);
-        } catch (dbgErr) {
-          logger.warn(`Failed to save debug JSON: ${dbgErr.message}`);
-        }
-        // --------------------
+
 
         logger.info(`[${index + 1}/${pdfFiles.length}] ${file.name} → ${filteredRecords.length} records`);
 

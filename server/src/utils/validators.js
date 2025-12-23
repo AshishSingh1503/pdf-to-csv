@@ -210,3 +210,105 @@ export const fixJumbledLandline = (rawLandline) => {
     }
     return s.replace(/\D/g, '');
 };
+export const validateRecords = (records) => {
+    const cleanRecords = [];
+    const rejectedRecords = [];
+
+    for (const record of records) {
+        const rawFirst = String(record.first_name || '').trim();
+        const rawLast = String(record.last_name || '').trim();
+        const rawDob = String(record.dateofbirth || '').trim();
+        const rawLastseen = String(record.lastseen || '').trim();
+
+        const firstName = cleanName(rawFirst);
+        const lastName = cleanName(rawLast);
+
+        const mobile = String(record.mobile || '').trim();
+        let address = String(record.address || '').trim();
+        const email = String(record.email || '').trim();
+        const rawLandline = String(record.landline || '').trim();
+
+        address = fixAddressOrdering(address);
+
+        const dateofbirth = normalizeDateField(rawDob);
+        const lastseen = normalizeDateField(rawLastseen);
+
+        if (!firstName || firstName.length <= 1) {
+            rejectedRecords.push({
+                first_name: firstName,
+                last_name: lastName,
+                mobile,
+                address,
+                email,
+                dateofbirth,
+                landline: rawLandline,
+                lastseen,
+                rejection_reason: 'Invalid name'
+            });
+            continue;
+        }
+
+        if (!mobile) {
+            rejectedRecords.push({
+                first_name: firstName,
+                last_name: lastName,
+                mobile,
+                address,
+                email,
+                dateofbirth,
+                landline: rawLandline,
+                lastseen,
+                rejection_reason: 'Missing mobile number'
+            });
+            continue;
+        }
+
+        const mobileDigits = mobile.replace(REGEX_PATTERNS.digitOnly, '');
+        if (!(mobileDigits.length === 10 && mobileDigits.startsWith('04'))) {
+            rejectedRecords.push({
+                first_name: firstName,
+                last_name: lastName,
+                mobile,
+                address,
+                email,
+                dateofbirth,
+                landline: rawLandline,
+                lastseen,
+                rejection_reason: 'Invalid mobile number'
+            });
+            continue;
+        }
+
+        if (!address) {
+            rejectedRecords.push({
+                first_name: firstName,
+                last_name: lastName,
+                mobile,
+                address,
+                email,
+                dateofbirth,
+                landline: rawLandline,
+                lastseen,
+                rejection_reason: 'Unable to validate address'
+            });
+            continue;
+        }
+
+        const landline = isValidLandline(rawLandline) ? rawLandline.replace(REGEX_PATTERNS.digitOnly, '') : '';
+        const full_name = `${firstName} ${lastName}`.trim();
+
+        cleanRecords.push({
+            full_name: full_name,
+            first_name: firstName,
+            last_name: lastName,
+            dateofbirth: dateofbirth || '',
+            address: address,
+            mobile: mobileDigits,
+            email: email || '',
+            landline: landline,
+            lastseen: lastseen || '',
+        });
+    }
+
+    return { validRecords: cleanRecords, rejectedRecords };
+};
