@@ -75,44 +75,102 @@ export const cleanName = (name) => {
 export const normalizeDateField = (dateStr) => {
     if (!dateStr) return '';
     let s = dateStr.trim();
+    // 1. Replace common separators (dot, slash, space) with dash
+    s = s.replace(/[\.\/\s]+/g, '-');
+
+    // 2. Insert dash between Digit-Letter and Letter-Digit
+    s = s.replace(/(\d)([A-Za-z])/g, '$1-$2');
+    s = s.replace(/([A-Za-z])(\d)/g, '$1-$2');
+
+    // 3. Normalize dashes (clean up duplicates and non-standard dashes)
     s = s.replace(REGEX_PATTERNS.dashNormalize, '-');
     s = s.replace(REGEX_PATTERNS.dashMultiple, '-');
     s = s.replace(REGEX_PATTERNS.dashTrim, '');
-    s = s.replace(REGEX_PATTERNS.dateInvalidChars, '');
-    s = s.replace(/\./g, '-');
+    // NOTE: We do NOT strip all "invalid" chars because we want strict structure.
+    // Assuming dateInvalidChars might be too aggressive or not aggressive enough, 
+    // but for strict validation we rely on specific regex matches below.
 
-    // Handle various date formats
-    const matchFormat1 = s.match(/^(\d{1,2})-([A-Za-z]{3,})-?(\d{4})$/);
-    if (matchFormat1) {
-        s = `${matchFormat1[1]}-${matchFormat1[2]}-${matchFormat1[3]}`;
+    let year = null;
+    let month = null;
+    let day = null;
+
+    // Helper: validate ranges
+    const isValidDate = (y, m, d) => {
+        const yi = parseInt(y, 10);
+        const mi = parseInt(m, 10);
+        const di = parseInt(d, 10);
+        if (yi < 1900 || yi > 2025) return false;
+        if (mi < 1 || mi > 12) return false;
+        if (di < 1 || di > 31) return false;
+
+        // Strict day check (e.g. Feb 30)
+        const dateObj = new Date(yi, mi - 1, di);
+        if (dateObj.getFullYear() !== yi || dateObj.getMonth() !== mi - 1 || dateObj.getDate() !== di) {
+            return false;
+        }
+        return true;
+    };
+
+    // Format 1: DD-Mon-YYYY (e.g., 20-Aug-2001) or DD-MM-YYYY
+    // Regex explanation:
+    // ^(\d{1,2})       -> Day (1 or 2 digits)
+    // -                -> Separator
+    // ([A-Za-z]{3,}|\d{1,2}) -> Month (Name e.g. Aug or Digits e.g. 08)
+    // -                -> Separator
+    // (\d{4})$         -> Year (4 digits)
+    const matchDDMMYYYY = s.match(/^(\d{1,2})-([A-Za-z]{3,}|\d{1,2})-(\d{4})$/);
+    if (matchDDMMYYYY) {
+        day = matchDDMMYYYY[1];
+        month = matchDDMMYYYY[2];
+        year = matchDDMMYYYY[3];
+    } else {
+        // Format 2: YYYY-MM-DD (e.g. 2001-08-20)
+        const matchYYYYMMDD = s.match(/^(\d{4})-([A-Za-z]{3,}|\d{1,2})-(\d{1,2})$/);
+        if (matchYYYYMMDD) {
+            year = matchYYYYMMDD[1];
+            month = matchYYYYMMDD[2];
+            day = matchYYYYMMDD[3];
+        } else {
+            // Format 3: Mon DD, YYYY or similar with spaces (handled by some current logic?)
+            // The current code handled: D-Mon-YYYY with spaces normalized to dashes?
+            // Let's stick to the specific formats observed.
+
+            // Check existing fallback: ^(\d{1,2})([A-Za-z]{3,})(\d{4})$ (e.g. 20Aug2001)
+            const matchPacked = s.match(/^(\d{1,2})([A-Za-z]{3,})(\d{4})$/);
+            if (matchPacked) {
+                day = matchPacked[1];
+                month = matchPacked[2];
+                year = matchPacked[3];
+            }
+        }
     }
 
-    const matchFormat2 = s.match(/^([A-Za-z]{3,})-?(\d{4})-?(\d{1,2})$/);
-    if (matchFormat2) {
-        s = `${matchFormat2[3]}-${matchFormat2[1]}-${matchFormat2[2]}`;
+    if (year && month && day) {
+        // Normalize month if it is text
+        if (isNaN(parseInt(month))) {
+            const months = {
+                'jan': '01', 'feb': '02', 'mar': '03', 'apr': '04', 'may': '05', 'jun': '06',
+                'jul': '07', 'aug': '08', 'sep': '09', 'oct': '10', 'nov': '11', 'dec': '12'
+            };
+            const mLower = month.substring(0, 3).toLowerCase();
+            if (months[mLower]) {
+                month = months[mLower];
+            } else {
+                return ''; // Invalid month name
+            }
+        }
+
+        // Pad numbers
+        month = String(month).padStart(2, '0');
+        day = String(day).padStart(2, '0');
+
+        if (isValidDate(year, month, day)) {
+            return `${year}-${month}-${day}`;
+        }
     }
 
-    const matchFormat3 = s.match(/^(\d{1,2})-([A-Za-z]{3,})-(\d{4})$/);
-    if (matchFormat3) {
-        s = `${matchFormat3[1]} ${matchFormat3[2]} ${matchFormat3[3]}`;
-    }
-
-    const match = s.match(REGEX_PATTERNS.dateFormat);
-    if (match) {
-        s = `${match[1]}-${match[2]}-${match[3]}`;
-    }
-
-    try {
-        const dt = new Date(s);
-        if (isNaN(dt.getTime())) return '';
-        const year = dt.getFullYear();
-        if (year < 1900 || year > 2025) return '';
-        const month = String(dt.getMonth() + 1).padStart(2, '0');
-        const day = String(dt.getDate()).padStart(2, '0');
-        return `${year}-${month}-${day}`;
-    } catch (e) {
-        return '';
-    }
+    // REJECT anything else. Do not use new Date(s) fallback.
+    return '';
 };
 
 export const isValidLandline = (landline) => {
@@ -151,4 +209,106 @@ export const fixJumbledLandline = (rawLandline) => {
         }
     }
     return s.replace(/\D/g, '');
+};
+export const validateRecords = (records) => {
+    const cleanRecords = [];
+    const rejectedRecords = [];
+
+    for (const record of records) {
+        const rawFirst = String(record.first_name || '').trim();
+        const rawLast = String(record.last_name || '').trim();
+        const rawDob = String(record.dateofbirth || '').trim();
+        const rawLastseen = String(record.lastseen || '').trim();
+
+        const firstName = cleanName(rawFirst);
+        const lastName = cleanName(rawLast);
+
+        const mobile = String(record.mobile || '').trim();
+        let address = String(record.address || '').trim();
+        const email = String(record.email || '').trim();
+        const rawLandline = String(record.landline || '').trim();
+
+        address = fixAddressOrdering(address);
+
+        const dateofbirth = normalizeDateField(rawDob);
+        const lastseen = normalizeDateField(rawLastseen);
+
+        if (!firstName || firstName.length <= 1) {
+            rejectedRecords.push({
+                first_name: firstName,
+                last_name: lastName,
+                mobile,
+                address,
+                email,
+                dateofbirth,
+                landline: rawLandline,
+                lastseen,
+                rejection_reason: 'Invalid name'
+            });
+            continue;
+        }
+
+        if (!mobile) {
+            rejectedRecords.push({
+                first_name: firstName,
+                last_name: lastName,
+                mobile,
+                address,
+                email,
+                dateofbirth,
+                landline: rawLandline,
+                lastseen,
+                rejection_reason: 'Missing mobile number'
+            });
+            continue;
+        }
+
+        const mobileDigits = mobile.replace(REGEX_PATTERNS.digitOnly, '');
+        if (!(mobileDigits.length === 10 && mobileDigits.startsWith('04'))) {
+            rejectedRecords.push({
+                first_name: firstName,
+                last_name: lastName,
+                mobile,
+                address,
+                email,
+                dateofbirth,
+                landline: rawLandline,
+                lastseen,
+                rejection_reason: 'Invalid mobile number'
+            });
+            continue;
+        }
+
+        if (!address) {
+            rejectedRecords.push({
+                first_name: firstName,
+                last_name: lastName,
+                mobile,
+                address,
+                email,
+                dateofbirth,
+                landline: rawLandline,
+                lastseen,
+                rejection_reason: 'Unable to validate address'
+            });
+            continue;
+        }
+
+        const landline = isValidLandline(rawLandline) ? rawLandline.replace(REGEX_PATTERNS.digitOnly, '') : '';
+        const full_name = `${firstName} ${lastName}`.trim();
+
+        cleanRecords.push({
+            full_name: full_name,
+            first_name: firstName,
+            last_name: lastName,
+            dateofbirth: dateofbirth || '',
+            address: address,
+            mobile: mobileDigits,
+            email: email || '',
+            landline: landline,
+            lastseen: lastseen || '',
+        });
+    }
+
+    return { validRecords: cleanRecords, rejectedRecords };
 };
