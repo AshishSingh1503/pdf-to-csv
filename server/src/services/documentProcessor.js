@@ -6,7 +6,6 @@ import pLimit from "p-limit";
 import { WorkerThreadPool } from "../utils/workerThreadPool.js";
 import os from "os";
 import { promises as fsPromises } from "fs";
-import fs from "fs";
 
 // --- CONFIGURATION & CONSTANTS ---
 const SAFE_MAX_WORKERS = config.maxWorkers;
@@ -404,10 +403,6 @@ export const processPDFs = async (pdfFiles, batchSize = 10, maxWorkers = 4) => {
             }
 
             // 2. Try mention text
-            let text = getText(entity);
-
-
-
             return text;
           };
 

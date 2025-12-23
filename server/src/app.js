@@ -10,22 +10,17 @@ import adminRoutes from "./routes/adminRoutes.js";
 import { initializeDatabase } from "./models/database.js";
 import logger from './utils/logger.js';
 
-const app = express();
+import { config } from "./config/index.js";
 
-const allowedOrigins = process.env.ALLOWED_ORIGINS
-  ? process.env.ALLOWED_ORIGINS.split(',')
-  : [
-    "https://pdf2csv-frontend-2xcfwc7m6a-uc.a.run.app",
-    "http://localhost:5173",
-  ];
+const app = express();
 
 const corsOptions = {
   origin: (origin, callback) => {
-    logger.info(`CORS Check: Origin=${origin}`);
-    if (allowedOrigins.includes(origin) || !origin) {
+    logger.debug(`CORS Check: Origin=${origin}`);
+    if (config.allowedOrigins.includes(origin) || !origin) {
       callback(null, true);
     } else {
-      logger.warn(`CORS Blocked: Origin=${origin} is not in allowed list: ${allowedOrigins.join(', ')}`);
+      logger.warn(`CORS Blocked: Origin=${origin} is not in allowed list: ${config.allowedOrigins.join(', ')}`);
       callback(new Error("Not allowed by CORS"));
     }
   },

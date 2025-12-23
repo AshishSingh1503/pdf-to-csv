@@ -152,4 +152,12 @@ export const config = {
   maxWorkers: parseInt(process.env.MAX_WORKERS, 10) || 24,
   batchSizeRecords: parseInt(process.env.DB_INSERT_CHUNK_SIZE, 10) || 5000,
   maxConcurrentDocAIRequests: parseInt(process.env.MAX_CONCURRENT_DOCAI_REQUESTS, 10) || 150,
+
+  // CORS
+  allowedOrigins: process.env.ALLOWED_ORIGINS
+    ? process.env.ALLOWED_ORIGINS.split(',')
+    : [
+      "https://pdf2csv-frontend-2xcfwc7m6a-uc.a.run.app",
+      "http://localhost:5173",
+    ],
 };
