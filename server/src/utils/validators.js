@@ -1,8 +1,8 @@
 export const REGEX_PATTERNS = {
-    addressStatePostcodeStart: /^\s*([A-Za-z]{2,3})\s+(\d{4})\s+(.+)$/i,
-    addressPostcodeStateEnd: /^\s*(\d{4})\s+(.+?)\s+([A-Za-z]{2,3})\s*$/i,
-    addressStatePostcodeMiddle: /^(.+?)\s+([A-Za-z]{2,3})\s+(\d{4})\s+(.+)$/i,
-    addressStatePostcodeAny: /([A-Za-z]{2,3})\s+(\d{4})/i,
+    addressStatePostcodeStart: /^\s*(NSW|VIC|QLD|WA|SA|TAS|ACT|NT)\s+(\d{4})\s+(.+)$/i,
+    addressPostcodeStateEnd: /^\s*(\d{4})\s+(.+?)\s+(NSW|VIC|QLD|WA|SA|TAS|ACT|NT)\s*$/i,
+    addressStatePostcodeMiddle: /^(.+?)\s+(NSW|VIC|QLD|WA|SA|TAS|ACT|NT)\s+(\d{4})\s+(.+)$/i,
+    addressStatePostcodeAny: /(NSW|VIC|QLD|WA|SA|TAS|ACT|NT)\s+(\d{4})/i,
     nameInvalidChars: /[^A-Za-zÀ-ÖØ-öø-ÿ'\-\s]/g,
     nameSpecialChars: /|･･･|…|•|\u2026/g,
     dateInvalidChars: /[^0-9A-Za-z\s\-\/]/g,
