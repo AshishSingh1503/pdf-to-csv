@@ -968,9 +968,13 @@ export const downloadCollectionFile = async (req, res, fileType) => {
 
     } else {
       // CSV export
+      // ⭐ ADD BOM for Excel Compatibility
+      fs.writeFileSync(filePath, '\uFEFF', { encoding: 'utf8' });
+
       const csvWriter = createObjectCsvWriter({
         path: filePath,
-        header: Object.keys(records[0] || {}).map(key => ({ id: key, title: key }))
+        header: Object.keys(records[0] || {}).map(key => ({ id: key, title: key })),
+        append: true // Append to the BOM we just wrote
       });
       await csvWriter.writeRecords(records);
       logger.info(`Created ${fileName}: ${fs.statSync(filePath).size} bytes`);
