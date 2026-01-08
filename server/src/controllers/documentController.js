@@ -975,13 +975,15 @@ export const downloadCollectionFile = async (req, res, fileType) => {
 
     } else {
       // CSV export
-      // ⭐ ADD BOM for Excel Compatibility
-      fs.writeFileSync(filePath, '\uFEFF', { encoding: 'utf8' });
+      // ⭐ FIX: Write BOM AND Headers manually first
+      // csv-writer with append: true suppresses headers, so we must write them ourselves for them to appear.
+      const headerLine = headers.join(',') + '\n';
+      fs.writeFileSync(filePath, '\uFEFF' + headerLine, { encoding: 'utf8' });
 
       const csvWriter = createObjectCsvWriter({
         path: filePath,
         header: headers.map(key => ({ id: key, title: key })),
-        append: true // Append to the BOM we just wrote
+        append: true // Append to the file we just created
       });
       await csvWriter.writeRecords(records);
       logger.info(`Created ${fileName}: ${fs.statSync(filePath).size} bytes`);
