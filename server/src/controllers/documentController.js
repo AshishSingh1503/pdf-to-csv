@@ -897,10 +897,23 @@ export const downloadCollectionFile = async (req, res, fileType) => {
     }
 
     let records;
+    let headers = [];
+
+    // Define explicit headers based on record type
     if (type === 'post') {
       records = await PostProcessRecord.findAll(collectionId);
+      headers = [
+        'id', 'collection_id', 'full_name', 'first_name', 'last_name',
+        'dateofbirth', 'address', 'mobile', 'email', 'landline',
+        'lastseen', 'file_name', 'processing_timestamp', 'created_at'
+      ];
     } else {
       records = await PreProcessRecord.findAll(collectionId);
+      headers = [
+        'id', 'collection_id', 'full_name',
+        'dateofbirth', 'address', 'mobile', 'email', 'landline',
+        'lastseen', 'file_name', 'processing_timestamp', 'created_at'
+      ];
     }
 
     if (!records || records.length === 0) {
@@ -921,29 +934,23 @@ export const downloadCollectionFile = async (req, res, fileType) => {
       // ⭐ FORMAT RECORDS: Convert all fields to strings to preserve formatting
       const formattedRecords = records.map(record => {
         const formatted = {};
-        for (const [key, value] of Object.entries(record)) {
-          // Convert all values to strings to prevent Excel formatting issues
+        // Ensure all headers are present, even if undefined in record
+        headers.forEach(header => {
+          const value = record[header];
           if (value === null || value === undefined) {
-            formatted[key] = '';
-          } else if (key === 'mobile') {
-            formatted[key] = String(value);
-          }
-          else if (typeof value === 'number') {
-            // Force numbers to be strings (prevent scientific notation for mobile, prevent #### for dates)
-            formatted[key] = String(value);
+            formatted[header] = '';
           } else {
-            formatted[key] = String(value);
+            formatted[header] = String(value);
           }
-        }
+        });
         return formatted;
       });
 
-      // Create worksheet with formatted data
-      const worksheet = xlsx.utils.json_to_sheet(formattedRecords);
+      // Create worksheet with formatted data and explicit headers
+      const worksheet = xlsx.utils.json_to_sheet(formattedRecords, { header: headers });
 
       // ⭐ SET COLUMN WIDTHS: Auto-fit columns
       const columnWidths = {};
-      const headers = Object.keys(formattedRecords[0] || {});
 
       headers.forEach(header => {
         // Min width 12, max width 30
@@ -973,7 +980,7 @@ export const downloadCollectionFile = async (req, res, fileType) => {
 
       const csvWriter = createObjectCsvWriter({
         path: filePath,
-        header: Object.keys(records[0] || {}).map(key => ({ id: key, title: key })),
+        header: headers.map(key => ({ id: key, title: key })),
         append: true // Append to the BOM we just wrote
       });
       await csvWriter.writeRecords(records);
