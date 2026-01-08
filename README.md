@@ -1,165 +1,113 @@
-# 📄 PDF to CSV Converter
+# 📄 PDF to CSV Person Extraction System
 
-Processing pipeline for extracting, validating, and structuring person records from PDF documents using Google Cloud Document AI.
-
-## 🚀 Overview
-
-This full-stack application automates the extraction of contact information (Name, Address, Mobile, Email, DOB, etc.) from PDF files. It handles high-volume batch processing, complex entity relationships, and ensures data integrity through rigorous validation and deduplication strategies.
-
-### Key Features
-- **Batch Processing**: Handle multiple PDF uploads simultaneously with high throughput.
-- **AI-Powered Extraction**: Leverages Google Cloud Document AI for intelligent text parsing.
-- **Smart Data Recovery**:Custom algorithms to recover "orphaned" entities (e.g., addresses not linked to a person).
-- **Advanced Validation**:
-  - Centralized validation logic shared between main and worker threads.
-  - Verification of mobile numbers (AU format), email addresses, and dates.
-  - "Look Left" support for date extraction (deprecated/removed in favor of strict DocAI normalization).
-- **Deduplication**: Intelligent merging of duplicate records based on mobile numbers, prioritizing the most complete datasets.
-- **Worker Threads**: CPU-intensive tasks (validation) offloaded to worker threads for non-blocking I/O.
+A robust, full-stack solution for ingesting PDF files, intelligently extracting Person entities using Google Cloud Document AI, and rigorously validating/cleaning the data for high-quality CSV/Database output.
 
 ---
 
-## 🛠️ Tech Stack
+## 🚀 Project Overview
 
-### Frontend
-- **Framework**: React 19
-- **Build Tool**: Vite
-- **Styling**: Tailwind CSS v4
-- **HTTP Client**: Axios
+**What is this?**
+This system automates the digitization of unstructure PDF documents containing personal information. It is designed to handle messy inputs (jumbled text, partial addresses, various date formats) and produce clean, standardized records.
 
-### Backend
-- **Runtime**: Node.js
-- **Framework**: Express.js
-- **Database**: PostgreSQL (via `pg`)
-- **Processing**:
-  - `@google-cloud/documentai`
-  - `worker_threads` for parallel processing
-  - `p-limit` for concurrency control
-- **Utilities**: `winston` (logging), `csv-writer`, `xlsx`, `archiver`
+**What data are we ingesting?**
+The system creates "Person" records containing:
+- **Full Name** (First/Last)
+- **Mobile Number** (Strictly validated Australian `04xxxxxxxx` format)
+- **Address** (Cleaned and normalized)
+- **Email** (Validation)
+- **Date of Birth** & **Last Seen** (Normalized dates)
+- **Landline** (Validated)
+
+---
+
+## 🔄 Data Architecture & Flow
+
+### 1. Ingestion
+Data enters the system via two primary methods:
+- **Direct Upload**: Users upload PDFs directly through the React Frontend.
+- **Google Cloud Storage (GCS)**: The system can process files stored in GCS buckets (supported in `processPDFs`).
+
+### 2. Processing (The "Brain")
+Once a PDF is received:
+1.  **Google Document AI**: The file is sent to a specific processor trained to identify entities (Person, Name, Address, etc.).
+2.  **Raw Entity Extraction**: The app parses the AI response, mapping raw text entities to a `Person` object.
+3.  **Entity Recovery**: If an address is "floating" (not linked to a specific person by AI) but overlaps vertically with a person record, the system intelligently "recovers" and assigns it.
+
+### 3. Logic Pipeline (Validation & Cleaning)
+Every record goes through a rigorous centralized validation suite (`validators.js`):
+
+#### 🧹 Address Logic
+- **Cleaning**: Removes special characters, collapses whitespace, and trims noise.
+- **Smart Reordering**:
+    - The system detects if an address is jumbled (e.g., "State Postcode Street").
+    - **Strict Protection**: It *only* attempts to reorder if it finds a **Valid Australian State** (NSW, VIC, QLD, WA, SA, TAS, ACT, NT). This prevents false positives where words like "Unit" (containing "nit") were mistakenly identified as "NT".
+- **Normalization**: Ensures final format is `[Street] [State] [Postcode]`.
+
+#### 📱 Mobile Logic
+- **Jumble Fix**: Can repair numbers like `1234560488` by rotating them to find the valid `04` start.
+- **Format Constraint**: Must be exactly 10 digits and start with `04`. Non-compliant numbers cause record **Rejection**.
+
+#### 📅 Date Logic
+- **Normalization**: Converts `20-Aug-2001`, `2001.08.20`, etc., to `YYYY-MM-DD`.
+- **Validation**:
+    - Enforces years between 1900-2025.
+    - Validates day/month correctness (e.g., rejects Feb 30).
+    - Invalid dates are cleared (set to empty) rather than rejecting the whole record.
+
+#### 👥 Deduplication Strategy
+When multiple records share the same **Mobile Number**:
+1.  **Winner**: The record with a valid Address is prioritized.
+2.  **Tie-Breaker**: If both have addresses (or neither), the one with the most populated fields (Name, Email, etc.) wins.
+3.  **Loser**: Duplicates are discarded to ensure unique Person entities.
+
+### 4. Storage & Export
+- **Database**: Valid outcomes are inserted into **PostgreSQL**.
+- **Export**: Users can download the final clean dataset as CSV or Excel files.
+
+---
+
+## 🛠️ Technology Stack
+
+| Component | Tech | Purpose |
+| :--- | :--- | :--- |
+| **Backend** | **Node.js / Express** | API & Orchestration |
+| **Language** | **JavaScript (ES Modules)** | Logic |
+| **Database** | **PostgreSQL** | Persistent storage |
+| **AI Service** | **Google Document AI** | OCR & Entity Extraction |
+| **Processing** | **Worker Threads** | Offloading heavy CPU validation tasks |
+| **Queue** | **p-limit** | Concurrency control for API rate limits |
+| **Frontend** | **React** | User Interface |
+| **Styling** | **Tailwind CSS** | UI Component styling |
 
 ---
 
 ## 📂 Project Structure
 
-Verified Monorepo structure:
+```bash
+server/
+├── src/
+│   ├── services/
+│   │   ├── documentProcessor.js  # Core orchestration (DocAI -> Extraction -> Validation)
+│   │   └── validations.worker.js # CPU-bound validation tasks
+│   ├── utils/
+│   │   └── validators.js         # The "Source of Truth" for all regex/cleaning logic
+│   ├── config/                   # Envs & Constants
+│   └── routes/                   # API Endpoints
+└── ...
+```
 
-```
-pdf-to-csv/
-├── client/                 # React Frontend
-│   ├── src/
-│   ├── index.html
-│   └── vite.config.js
-│
-├── server/                 # Node.js Backend
-│   ├── src/
-│   │   ├── config/         # Centralized configuration
-│   │   ├── controllers/    # Request handlers
-│   │   ├── routes/         # API definitions
-│   │   ├── services/       # Core business logic (DocumentProcessor)
-│   │   └── utils/          # Helpers (Validators, Logger)
-│   ├── index.js            # Entry point
-│   └── package.json
-│
-└── README.md
-```
+## ⚙️ Key Configuration (Envs)
+
+- `MAX_WORKERS`: Controls parallel processing power (Default: 24).
+- `MAX_CONCURRENT_DOCAI_REQUESTS`: Throttles calls to Google to avoid quotas.
+- `PROJECT_ID` / `PROCESSOR_ID`: Link to the specific Google Cloud resources.
 
 ---
 
-## ⚙️ Configuration
+## 🚀 Quick Usage
 
-The application is configured via environment variables. Create a `.env` file in the `server/` directory.
-
-### Core
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `PORT` | Server listening port | `5000` |
-| `NODE_ENV` | Environment mode | `development` |
-| `ALLOWED_ORIGINS` | Comma-separated CORS origins | `http://localhost:5173` |
-
-### Database
-| Variable | Description |
-|----------|-------------|
-| `DB_HOST` | Database hostname |
-| `DB_PORT` | Database port (e.g., `5432`) |
-| `DB_NAME` | Database name |
-| `DB_USER` | Database username |
-| `DB_PASSWORD` | Database password |
-| `DB_SSL` | Enable SSL (`true`/`false`) |
-
-### Google Cloud
-| Variable | Description |
-|----------|-------------|
-| `PROJECT_ID` | GCP Project ID |
-| `LOCATION` | Document AI Location (e.g., `us`) |
-| `PROCESSOR_ID` | Document AI Processor ID |
-| `GOOGLE_APPLICATION_CREDENTIALS` | Path to service account JSON key |
-
-### Performance & Tuning
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `MAX_WORKERS` | Max worker threads | `24` |
-| `MAX_CONCURRENT_DOCAI_REQUESTS` | Concurent requests to DocAI | `150` |
-| `DB_INSERT_CHUNK_SIZE` | Records per DB insert batch | `5000` |
-| `RETRY_ATTEMPTS` | Retries for failed DocAI calls | `3` |
-| `INITIAL_BACKOFF_MS` | Backoff start time (ms) | `1000` |
-
----
-
-## 🚀 Getting Started
-
-### 1. Prerequisites
-- Node.js (v18+)
-- PostgreSQL Database
-- Google Cloud Service Account with Document AI Admin access
-
-### 2. Installation
-
-**Backend**
-```bash
-cd server
-npm install
-```
-
-**Frontend**
-```bash
-cd client
-npm install
-```
-
-### 3. Running Locally
-
-**Start Backend**
-```bash
-cd server
-npm start
-```
-*Server runs on http://localhost:5000*
-
-**Start Frontend**
-```bash
-cd client
-npm run dev
-```
-*Client runs on http://localhost:5173*
-
----
-
-## 🔄 Data Architecture
-
-1.  **Extraction**: `documentProcessor.js` sends PDFs to DocAI.
-2.  **Parsing**: Raw entities are mapped to a structured `Person` model.
-3.  **Validation**: Records are passed to `validateRecords` (in `validators.js`), checking for:
-    - Valid Name (length > 1)
-    - Presence of Mobile Number
-    - Mobile Number format (04...)
-    - Presence of Address
-4.  **Deduplication**: Valid records are grouped by Mobile. The entries with the most data (Address > Fields Count) are kept.
-5.  **Storage**: Unique, valid records are inserted into PostgreSQL.
-
----
-
-## 🔍 API Endpoints
-
-- `POST /api/documents/upload`: Upload and process PDF files.
-- `GET /api/documents/status`: Check processing status.
-- `GET /api/data/export`: Download processed data as CSV/XLSX.
+1.  **Start Server**: `cd server && npm start`
+2.  **Start Client**: `cd client && npm run dev`
+3.  **Upload**: Go to `localhost:5173`, drag & drop partial or full PDFs.
+4.  **Monitor**: Watch the logs for "Processing file..." and "Success rate..." stats.
+5.  **Export**: Download the clean list.

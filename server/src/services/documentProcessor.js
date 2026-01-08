@@ -5,7 +5,7 @@ import path from "path";
 import pLimit from "p-limit";
 import { WorkerThreadPool } from "../utils/workerThreadPool.js";
 import os from "os";
-import { promises as fsPromises } from "fs";
+import fs, { promises as fsPromises } from "fs";
 
 // --- CONFIGURATION & CONSTANTS ---
 const SAFE_MAX_WORKERS = config.maxWorkers;
@@ -403,7 +403,7 @@ export const processPDFs = async (pdfFiles, batchSize = 10, maxWorkers = 4) => {
             }
 
             // 2. Try mention text
-            return text;
+            return getText(entity);
           };
 
           // Helper to check vertical overlap
