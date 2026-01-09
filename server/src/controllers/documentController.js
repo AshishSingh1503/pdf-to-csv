@@ -897,22 +897,44 @@ export const downloadCollectionFile = async (req, res, fileType) => {
     }
 
     let records;
-    let headers = [];
+    let headerMap = [];
 
-    // Define explicit headers based on record type
+    // Define explicit headers and titles based on record type
     if (type === 'post') {
       records = await PostProcessRecord.findAll(collectionId);
-      headers = [
-        'id', 'collection_id', 'full_name', 'first_name', 'last_name',
-        'dateofbirth', 'address', 'mobile', 'email', 'landline',
-        'lastseen', 'file_name', 'processing_timestamp', 'created_at'
+      // filtered: id, collection_id, Full Name, First Name, Last Name, Date of Birth, Address, Mobile, Email, Landline, Last seen, file_name, processing_timestamp, created_at
+      headerMap = [
+        { id: 'id', title: 'id' },
+        { id: 'collection_id', title: 'collection_id' },
+        { id: 'full_name', title: 'Full Name' },
+        { id: 'first_name', title: 'First Name' },
+        { id: 'last_name', title: 'Last Name' },
+        { id: 'dateofbirth', title: 'Date of Birth' },
+        { id: 'address', title: 'Address' },
+        { id: 'mobile', title: 'Mobile' },
+        { id: 'email', title: 'Email' },
+        { id: 'landline', title: 'Landline' },
+        { id: 'lastseen', title: 'Last seen' },
+        { id: 'file_name', title: 'file_name' },
+        { id: 'processing_timestamp', title: 'processing_timestamp' },
+        { id: 'created_at', title: 'created_at' }
       ];
     } else {
       records = await PreProcessRecord.findAll(collectionId);
-      headers = [
-        'id', 'collection_id', 'full_name',
-        'dateofbirth', 'address', 'mobile', 'email', 'landline',
-        'lastseen', 'file_name', 'processing_timestamp', 'created_at'
+      // raw: id, collection_id, Full Name, Date of Birth, Address, Mobile, Email, Landline, Last seen, file_name, processing_timestamp, created_at
+      headerMap = [
+        { id: 'id', title: 'id' },
+        { id: 'collection_id', title: 'collection_id' },
+        { id: 'full_name', title: 'Full Name' },
+        { id: 'dateofbirth', title: 'Date of Birth' },
+        { id: 'address', title: 'Address' },
+        { id: 'mobile', title: 'Mobile' },
+        { id: 'email', title: 'Email' },
+        { id: 'landline', title: 'Landline' },
+        { id: 'lastseen', title: 'Last seen' },
+        { id: 'file_name', title: 'file_name' },
+        { id: 'processing_timestamp', title: 'processing_timestamp' },
+        { id: 'created_at', title: 'created_at' }
       ];
     }
 
@@ -932,38 +954,40 @@ export const downloadCollectionFile = async (req, res, fileType) => {
 
     if (fileType === 'xlsx') {
       // ⭐ FORMAT RECORDS: Convert all fields to strings to preserve formatting
+      // Map internal keys to the specific titles requested
       const formattedRecords = records.map(record => {
         const formatted = {};
-        // Ensure all headers are present, even if undefined in record
-        headers.forEach(header => {
-          const value = record[header];
+        headerMap.forEach(({ id, title }) => {
+          const value = record[id];
           if (value === null || value === undefined) {
-            formatted[header] = '';
+            formatted[title] = '';
           } else {
-            formatted[header] = String(value);
+            formatted[title] = String(value);
           }
         });
         return formatted;
       });
 
+      const headerTitles = headerMap.map(h => h.title);
+
       // Create worksheet with formatted data and explicit headers
-      const worksheet = xlsx.utils.json_to_sheet(formattedRecords, { header: headers });
+      const worksheet = xlsx.utils.json_to_sheet(formattedRecords, { header: headerTitles });
 
       // ⭐ SET COLUMN WIDTHS: Auto-fit columns
       const columnWidths = {};
 
-      headers.forEach(header => {
+      headerTitles.forEach(title => {
         // Min width 12, max width 30
         const maxLength = Math.max(
-          header.length,
+          title.length,
           Math.max(
-            ...formattedRecords.map(r => String(r[header] || '').length)
+            ...formattedRecords.map(r => String(r[title] || '').length)
           )
         );
-        columnWidths[header] = { wch: Math.min(Math.max(maxLength + 2, 12), 30) };
+        columnWidths[title] = { wch: Math.min(Math.max(maxLength + 2, 12), 30) };
       });
 
-      worksheet['!cols'] = headers.map(h => columnWidths[h] || { wch: 12 });
+      worksheet['!cols'] = headerTitles.map(h => columnWidths[h] || { wch: 12 });
 
       // Create workbook and add worksheet
       const workbook = xlsx.utils.book_new();
@@ -977,15 +1001,32 @@ export const downloadCollectionFile = async (req, res, fileType) => {
       // CSV export
       // ⭐ FIX: Write BOM AND Headers manually first
       // csv-writer with append: true suppresses headers, so we must write them ourselves for them to appear.
-      const headerLine = headers.join(',') + '\n';
+      const headerLine = headerMap.map(h => h.title).join(',') + '\n';
       fs.writeFileSync(filePath, '\uFEFF' + headerLine, { encoding: 'utf8' });
+
+      // Use the map to define the writers, but note that csv-writer expects 'id' to match the object key
+      // and 'title' to be the header. However, we are manipulating the output to match exact titles.
+      // To ensure data aligns with the manually written header line, we need to make sure the writer
+      // puts the right value in the right column order.
+      // The safest way is to map the records to the titles just like we did for Excel,
+      // and then use a writer where id == title.
+
+      const formattedRecords = records.map(record => {
+        const formatted = {};
+        headerMap.forEach(({ id, title }) => {
+          // Direct mapping: formatted['Full Name'] = record.full_name
+          formatted[title] = record[id];
+        });
+        return formatted;
+      });
 
       const csvWriter = createObjectCsvWriter({
         path: filePath,
-        header: headers.map(key => ({ id: key, title: key })),
+        header: headerMap.map(({ title }) => ({ id: title, title: title })), // id matches the key in formattedRecords
         append: true // Append to the file we just created
       });
-      await csvWriter.writeRecords(records);
+
+      await csvWriter.writeRecords(formattedRecords);
       logger.info(`Created ${fileName}: ${fs.statSync(filePath).size} bytes`);
     }
 
